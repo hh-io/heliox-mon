@@ -12,6 +12,56 @@ import (
 	"time"
 )
 
+// collectRealtimeSpeed 每秒采集流量并计算实时网速（只更新内存，不写数据库）
+func (c *Collector) collectRealtimeSpeed() {
+	defer c.wg.Done()
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	var lastTx, lastRx uint64
+	var lastTs int64
+
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-ticker.C:
+			tx, rx, err := c.readProcNetDev()
+			if err != nil {
+				continue
+			}
+			now := time.Now().Unix()
+
+			// 计算速度
+			var txSpeed, rxSpeed float64
+			if lastTs > 0 && now > lastTs {
+				dt := float64(now - lastTs)
+				if tx >= lastTx {
+					txSpeed = float64(tx-lastTx) / dt
+				}
+				if rx >= lastRx {
+					rxSpeed = float64(rx-lastRx) / dt
+				}
+			}
+
+			// 更新内存快照
+			c.realtimeMu.Lock()
+			c.realtimeSnapshot = RealtimeSnapshot{
+				Ts:      now,
+				TxBytes: tx + c.totalTxOffset,
+				RxBytes: rx + c.totalRxOffset,
+				TxSpeed: txSpeed,
+				RxSpeed: rxSpeed,
+			}
+			c.realtimeMu.Unlock()
+
+			lastTx = tx
+			lastRx = rx
+			lastTs = now
+		}
+	}
+}
+
 // doCollectTraffic 执行流量采集
 func (c *Collector) doCollectTraffic() {
 	now := time.Now().Unix()

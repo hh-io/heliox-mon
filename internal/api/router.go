@@ -25,16 +25,23 @@ import (
 
 // Server HTTP 服务器
 type Server struct {
-	cfg    *config.Config
-	db     *storage.DB
-	server *http.Server
+	cfg              *config.Config
+	db               *storage.DB
+	server           *http.Server
+	realtimeProvider RealtimeDataProvider
+}
+
+// RealtimeDataProvider 实时数据提供者接口
+type RealtimeDataProvider interface {
+	GetRealtimeSpeed() (txSpeed, rxSpeed float64, ts int64)
 }
 
 // NewServer 创建服务器
-func NewServer(cfg *config.Config, db *storage.DB) *Server {
+func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeDataProvider) *Server {
 	s := &Server{
-		cfg: cfg,
-		db:  db,
+		cfg:              cfg,
+		db:               db,
+		realtimeProvider: realtimeProvider,
 	}
 
 	mux := http.NewServeMux()
@@ -534,46 +541,16 @@ func (s *Server) handleTrafficRealtime(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			// 获取最新两条快照计算网速
-			rows, err := s.db.Query(
-				"SELECT ts, tx_bytes, rx_bytes FROM traffic_snapshots WHERE iface = 'total' ORDER BY ts DESC LIMIT 2",
-			)
-			if err != nil {
+			// 从内存读取实时网速（采集器每秒更新）
+			txSpeed, rxSpeed, ts := s.realtimeProvider.GetRealtimeSpeed()
+			if ts == 0 {
 				continue
 			}
-
-			var snapshots []struct {
-				ts int64
-				tx uint64
-				rx uint64
-			}
-			for rows.Next() {
-				var s struct {
-					ts int64
-					tx uint64
-					rx uint64
-				}
-				rows.Scan(&s.ts, &s.tx, &s.rx)
-				snapshots = append(snapshots, s)
-			}
-			rows.Close()
-
-			if len(snapshots) < 2 {
-				continue
-			}
-
-			dt := float64(snapshots[0].ts - snapshots[1].ts)
-			if dt <= 0 {
-				continue
-			}
-
-			txSpeed := float64(snapshots[0].tx-snapshots[1].tx) / dt
-			rxSpeed := float64(snapshots[0].rx-snapshots[1].rx) / dt
 
 			data := map[string]interface{}{
 				"tx_speed": txSpeed,
 				"rx_speed": rxSpeed,
-				"ts":       snapshots[0].ts,
+				"ts":       ts,
 			}
 			jsonData, _ := json.Marshal(data)
 			w.Write([]byte("data: " + string(jsonData) + "\n\n"))

@@ -35,6 +35,19 @@ type Collector struct {
 	// CPU 采样（用于计算实时使用率）
 	lastCPUTotal uint64
 	lastCPUIdle  uint64
+
+	// 实时快照（每秒更新，用于计算实时网速）
+	realtimeSnapshot RealtimeSnapshot
+	realtimeMu       sync.RWMutex
+}
+
+// RealtimeSnapshot 实时流量快照
+type RealtimeSnapshot struct {
+	Ts      int64
+	TxBytes uint64
+	RxBytes uint64
+	TxSpeed float64 // bytes/s
+	RxSpeed float64 // bytes/s
 }
 
 // Notifier 通知器接口
@@ -56,6 +69,20 @@ func New(cfg *config.Config, db *storage.DB, notifier Notifier) *Collector {
 	}
 }
 
+// GetRealtimeSnapshot 获取实时快照
+func (c *Collector) GetRealtimeSnapshot() RealtimeSnapshot {
+	c.realtimeMu.RLock()
+	defer c.realtimeMu.RUnlock()
+	return c.realtimeSnapshot
+}
+
+// GetRealtimeSpeed 获取实时网速（供 API 使用）
+func (c *Collector) GetRealtimeSpeed() (txSpeed, rxSpeed float64, ts int64) {
+	c.realtimeMu.RLock()
+	defer c.realtimeMu.RUnlock()
+	return c.realtimeSnapshot.TxSpeed, c.realtimeSnapshot.RxSpeed, c.realtimeSnapshot.Ts
+}
+
 // Start 启动采集器
 func (c *Collector) Start() {
 	// 初始化计数器偏移量，避免重启导致统计跳变
@@ -65,15 +92,19 @@ func (c *Collector) Start() {
 	c.wg.Add(1)
 	go c.collectSystemMetrics()
 
-	// 流量采集（每 1 分钟）
+	// 流量采集写入数据库（每 1 分钟）
 	c.wg.Add(1)
 	go c.collectTraffic()
+
+	// 实时网速采集（每 1 秒，只更新内存）
+	c.wg.Add(1)
+	go c.collectRealtimeSpeed()
 
 	// 延迟监控（每 1 分钟）
 	c.wg.Add(1)
 	go c.collectLatency()
 
-	// 日汇总任务（每小时检查一次）
+	// 日汇总任务（每分钟检查一次）
 	c.wg.Add(1)
 	go c.runDailyAggregation()
 
