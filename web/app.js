@@ -1334,6 +1334,8 @@ function renderTrendChart() {
     label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.toFixed(2)} GB`,
   };
   let tickCallback = null;
+  let trendAvgAnnotation = null;
+  let trendYMax = null;
 
   if (trendRange === "monthly") {
     if (!trendMonthlyData) return;
@@ -1417,27 +1419,84 @@ function renderTrendChart() {
     setTrendTitle(trendRange === "cycle" ? "本计费周期流量" : "近30天流量");
     updateTrendToggleState();
 
+    // 完整日期标签（用于 tooltip）
     labels = source.map((d) => d.date.slice(5));
     const totals = source.map((d) => (d.tx + d.rx) / 1024 / 1024 / 1024);
+
+    // 计算平均值用于参考线
+    const avgValue = totals.reduce((a, b) => a + b, 0) / totals.length;
+
+    // 计算 Y 轴动态范围
+    const maxValue = Math.max(...totals, avgValue);
+    const yMax = niceCeil(maxValue * 1.15); // 留出 15% 空间
+
+    // 生成渐变填充（40% → 5%）
+    const makeTrendGradient = (context) => {
+      const chart = context.chart;
+      const { chartArea } = chart;
+      if (!chartArea) return "rgba(10, 132, 255, 0.2)";
+      const gradient = chart.ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+      gradient.addColorStop(0, "rgba(10, 132, 255, 0.40)");
+      gradient.addColorStop(1, "rgba(10, 132, 255, 0.05)");
+      return gradient;
+    };
+
+    // 今日数据点特殊样式（最后一个点）
+    const pointRadii = totals.map((_, i) => (i === totals.length - 1 ? 6 : 0));
+    const pointBgColors = totals.map((_, i) =>
+      i === totals.length - 1 ? "#007AFF" : "transparent"
+    );
+    const pointBorderColors = totals.map((_, i) =>
+      i === totals.length - 1 ? "#fff" : "transparent"
+    );
+    const pointBorderWidths = totals.map((_, i) => (i === totals.length - 1 ? 2 : 0));
 
     datasets = [
       {
         label: "总流量",
         data: totals,
-        borderColor: "#4F7DF7",
-        backgroundColor: "rgba(79, 125, 247, 0.24)",
-        borderWidth: 2,
-        pointRadius: 2,
-        pointHoverRadius: 3,
-        tension: 0.35,
+        borderColor: "#007AFF", // macOS System Blue
+        backgroundColor: makeTrendGradient,
+        borderWidth: 2.5,
+        pointRadius: pointRadii,
+        pointBackgroundColor: pointBgColors,
+        pointBorderColor: pointBorderColors,
+        pointBorderWidth: pointBorderWidths,
+        pointHoverRadius: 5,
+        tension: 0.4,
+        cubicInterpolationMode: "monotone", // Monotone X 插值
         fill: true,
       },
     ];
+
+    // 今日流量数值（最后一个点）
+    const todayValue = totals[totals.length - 1];
+    const todayLabel = todayValue >= 1 ? `${todayValue.toFixed(1)} GB` : `${(todayValue * 1024).toFixed(0)} MB`;
+
     legendHtml = `
-      <span class="legend-item"><span class="dot" style="background:#4F7DF7"></span>总流量</span>
+      <span class="legend-item"><span class="dot" style="background:#007AFF"></span>总流量</span>
+      <span class="legend-item"><span class="dot" style="background:#86868b; opacity:0.6"></span>平均 ${avgValue.toFixed(2)} GB</span>
+      <span class="legend-item trend-today-badge"><span class="trend-today-pulse"></span>今日 ${todayLabel}</span>
     `;
     chartType = "line";
+
+    // X 轴稀疏显示（每 5 天）
+    tickCallback = function (value, index) {
+      // 显示首尾 + 每隔5天
+      if (index === 0 || index === labels.length - 1 || index % 5 === 0) {
+        return labels[index];
+      }
+      return "";
+    };
+
+    // Tooltip 回调 - 显示完整日期和数据
     tooltipCallbacks = {
+      title: (items) => {
+        const idx = items[0]?.dataIndex;
+        if (idx === undefined) return "";
+        const d = source[idx];
+        return d ? d.date : "";
+      },
       label: (ctx) => {
         const d = source[ctx.dataIndex];
         if (!d) {
@@ -1446,37 +1505,99 @@ function renderTrendChart() {
         const total = (d.tx + d.rx) / 1024 / 1024 / 1024;
         const up = d.tx / 1024 / 1024 / 1024;
         const down = d.rx / 1024 / 1024 / 1024;
-        return `总量: ${total.toFixed(2)} GB (↑${up.toFixed(
-          2,
-        )}, ↓${down.toFixed(2)})`;
+        return `总量: ${total.toFixed(2)} GB (↑${up.toFixed(2)}, ↓${down.toFixed(2)})`;
       },
     };
+
+    // 平均参考线注解
+    trendAvgAnnotation = {
+      type: "line",
+      yMin: avgValue,
+      yMax: avgValue,
+      borderColor: "rgba(134, 134, 139, 0.5)",
+      borderWidth: 1.5,
+      borderDash: [6, 4],
+      label: {
+        display: false,
+      },
+    };
+    trendYMax = yMax;
   }
 
   // 更新图例
   const legendEl = document.getElementById("trend-legend");
   if (legendEl) legendEl.innerHTML = legendHtml;
 
+  // 根据图表类型配置不同的选项
+  const isLineChart = chartType === "line";
+  const isLight = document.body.classList.contains("theme-light");
+  const gridColor = isLight ? "rgba(0, 0, 0, 0.08)" : "rgba(255, 255, 255, 0.08)";
+  const tickColor = isLight ? "#5c5c61" : "#6e6e80";
+
   const options = {
     responsive: true,
     maintainAspectRatio: false,
     animation: false,
+    layout: {
+      padding: { left: 0, right: 0 },
+    },
     plugins: {
       legend: { display: false },
-      tooltip: { callbacks: tooltipCallbacks },
+      tooltip: {
+        callbacks: tooltipCallbacks,
+        backgroundColor: isLight ? "rgba(255, 255, 255, 0.95)" : "rgba(28, 28, 30, 0.95)",
+        titleColor: isLight ? "#1c1c1e" : "#f5f5f7",
+        bodyColor: isLight ? "#1c1c1e" : "#f5f5f7",
+        borderColor: isLight ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)",
+        borderWidth: 1,
+        cornerRadius: 8,
+        padding: 10,
+      },
+      annotation: trendAvgAnnotation
+        ? {
+            annotations: {
+              avgLine: trendAvgAnnotation,
+            },
+          }
+        : undefined,
     },
     scales: {
       x: {
+        offset: !isLineChart, // 柱状图保留 offset，折线图撑满
         grid: { display: false },
         ticks: {
-          color: "#6e6e80",
+          color: tickColor,
           callback: tickCallback || undefined,
+          maxRotation: 0,
+          autoSkip: false,
         },
       },
-      y: {
-        display: false,
-        beginAtZero: true,
-      },
+      y: isLineChart
+        ? {
+            display: true,
+            position: "left",
+            beginAtZero: true,
+            max: trendYMax || undefined,
+            grid: {
+              color: gridColor,
+              drawBorder: false,
+              borderDash: [4, 4],
+            },
+            ticks: {
+              color: tickColor,
+              padding: 8,
+              callback: (value) => {
+                if (value >= 1024) return `${(value / 1024).toFixed(1)} TB`;
+                if (value >= 1) return `${value.toFixed(1)} GB`;
+                return `${(value * 1024).toFixed(0)} MB`;
+              },
+            },
+            border: { display: false },
+          }
+        : {
+            display: false,
+            beginAtZero: true,
+          },
     },
   };
 

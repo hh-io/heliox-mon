@@ -441,7 +441,6 @@ body.theme-light .section-title {
   height: 220px;
 }
 
-
 .realtime-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1034,4 +1033,41 @@ body.theme-light .threshold-marker {
   .latency-chart-wrap {
     height: 240px;
   }
+}
+
+/* 趋势图今日圆点呼吸动画 */
+@keyframes trendPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.6);
+    opacity: 0.4;
+  }
+}
+
+.trend-today-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 122, 255, 0.12);
+  padding: 4px 10px 4px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+  color: #007aff;
+}
+
+body.theme-light .trend-today-badge {
+  background: rgba(0, 122, 255, 0.1);
+}
+
+.trend-today-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #007aff;
+  animation: trendPulse 2s ease-in-out infinite;
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.25);
 }
