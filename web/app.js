@@ -1335,6 +1335,7 @@ function renderTrendChart() {
   };
   let tickCallback = null;
   let trendAvgAnnotation = null;
+  let trendMaxAnnotation = null;
   let trendYMax = null;
 
   if (trendRange === "monthly") {
@@ -1441,15 +1442,23 @@ function renderTrendChart() {
       return gradient;
     };
 
-    // 今日数据点特殊样式（最后一个点）
+    // 今日数据点特殊样式（最后一个点）+ hover 时高亮
     const pointRadii = totals.map((_, i) => (i === totals.length - 1 ? 6 : 0));
+    const pointHoverRadii = totals.map(() => 6); // 悬停时所有点都高亮
     const pointBgColors = totals.map((_, i) =>
       i === totals.length - 1 ? "#007AFF" : "transparent"
     );
+    const pointHoverBgColors = totals.map(() => "#007AFF"); // 悬停时蓝色
     const pointBorderColors = totals.map((_, i) =>
       i === totals.length - 1 ? "#fff" : "transparent"
     );
+    const pointHoverBorderColors = totals.map(() => "#fff");
     const pointBorderWidths = totals.map((_, i) => (i === totals.length - 1 ? 2 : 0));
+
+    // 计算极值索引
+    const maxIdx = totals.indexOf(Math.max(...totals));
+    const maxVal = totals[maxIdx];
+    const maxDate = source[maxIdx]?.date?.slice(5) || "";
 
     datasets = [
       {
@@ -1459,10 +1468,12 @@ function renderTrendChart() {
         backgroundColor: makeTrendGradient,
         borderWidth: 2.5,
         pointRadius: pointRadii,
+        pointHoverRadius: pointHoverRadii,
         pointBackgroundColor: pointBgColors,
+        pointHoverBackgroundColor: pointHoverBgColors,
         pointBorderColor: pointBorderColors,
+        pointHoverBorderColor: pointHoverBorderColors,
         pointBorderWidth: pointBorderWidths,
-        pointHoverRadius: 5,
         tension: 0.4,
         cubicInterpolationMode: "monotone", // Monotone X 插值
         fill: true,
@@ -1489,13 +1500,20 @@ function renderTrendChart() {
       return "";
     };
 
-    // Tooltip 回调 - 显示完整日期和数据
+    // 星期名称映射
+    const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+    // Tooltip 回调 - 显示完整日期+星期+趋势对比
     tooltipCallbacks = {
       title: (items) => {
         const idx = items[0]?.dataIndex;
         if (idx === undefined) return "";
         const d = source[idx];
-        return d ? d.date : "";
+        if (!d) return "";
+        // 解析日期获取星期
+        const dateObj = new Date(d.date);
+        const weekday = weekdays[dateObj.getDay()];
+        return `${d.date} (${weekday})`;
       },
       label: (ctx) => {
         const d = source[ctx.dataIndex];
@@ -1507,9 +1525,19 @@ function renderTrendChart() {
         const down = d.rx / 1024 / 1024 / 1024;
         return `总量: ${total.toFixed(2)} GB (↑${up.toFixed(2)}, ↓${down.toFixed(2)})`;
       },
+      afterLabel: (ctx) => {
+        // 趋势对比：与均值的差距
+        const val = ctx.raw;
+        if (avgValue <= 0) return "";
+        const diff = ((val - avgValue) / avgValue) * 100;
+        if (Math.abs(diff) < 1) return "≈ 均值";
+        const sign = diff > 0 ? "+" : "";
+        const color = diff > 0 ? "↑" : "↓";
+        return `${color} 较均值 ${sign}${diff.toFixed(0)}%`;
+      },
     };
 
-    // 平均参考线注解
+    // 平均参考线注解 + Avg 标签
     trendAvgAnnotation = {
       type: "line",
       yMin: avgValue,
@@ -1518,9 +1546,39 @@ function renderTrendChart() {
       borderWidth: 1.5,
       borderDash: [6, 4],
       label: {
-        display: false,
+        display: true,
+        content: "Avg",
+        position: "start",
+        backgroundColor: "rgba(134, 134, 139, 0.7)",
+        color: "#fff",
+        font: { size: 10, weight: "500" },
+        padding: { top: 2, bottom: 2, left: 4, right: 4 },
+        borderRadius: 4,
       },
     };
+
+    // Max 极值标注
+    trendMaxAnnotation = {
+      type: "point",
+      xValue: maxIdx,
+      yValue: maxVal,
+      backgroundColor: "rgba(255, 69, 58, 0.15)",
+      borderColor: "#FF453A",
+      borderWidth: 2,
+      radius: 8,
+      label: {
+        display: true,
+        content: `Max ${maxVal.toFixed(1)}G`,
+        position: "top",
+        backgroundColor: "rgba(255, 69, 58, 0.85)",
+        color: "#fff",
+        font: { size: 10, weight: "600" },
+        padding: { top: 3, bottom: 3, left: 6, right: 6 },
+        borderRadius: 6,
+        yAdjust: -12,
+      },
+    };
+
     trendYMax = yMax;
   }
 
@@ -1531,8 +1589,13 @@ function renderTrendChart() {
   // 根据图表类型配置不同的选项
   const isLineChart = chartType === "line";
   const isLight = document.body.classList.contains("theme-light");
-  const gridColor = isLight ? "rgba(0, 0, 0, 0.08)" : "rgba(255, 255, 255, 0.08)";
-  const tickColor = isLight ? "#5c5c61" : "#6e6e80";
+  const gridColor = isLight ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)"; // 10% 透明度
+  const tickColor = "#8E8E93"; // System Gray 2
+
+  // 构建 annotations 配置
+  const annotationsConfig = {};
+  if (trendAvgAnnotation) annotationsConfig.avgLine = trendAvgAnnotation;
+  if (trendMaxAnnotation) annotationsConfig.maxPoint = trendMaxAnnotation;
 
   const options = {
     responsive: true,
@@ -1541,24 +1604,30 @@ function renderTrendChart() {
     layout: {
       padding: { left: 0, right: 0 },
     },
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
     plugins: {
       legend: { display: false },
       tooltip: {
+        enabled: true,
+        mode: "index",
+        intersect: false,
         callbacks: tooltipCallbacks,
         backgroundColor: isLight ? "rgba(255, 255, 255, 0.95)" : "rgba(28, 28, 30, 0.95)",
         titleColor: isLight ? "#1c1c1e" : "#f5f5f7",
         bodyColor: isLight ? "#1c1c1e" : "#f5f5f7",
+        footerColor: isLight ? "#86868b" : "#8E8E93",
         borderColor: isLight ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)",
         borderWidth: 1,
         cornerRadius: 8,
-        padding: 10,
+        padding: 12,
+        displayColors: false,
+        titleFont: { weight: "600" },
       },
-      annotation: trendAvgAnnotation
-        ? {
-            annotations: {
-              avgLine: trendAvgAnnotation,
-            },
-          }
+      annotation: Object.keys(annotationsConfig).length > 0
+        ? { annotations: annotationsConfig }
         : undefined,
     },
     scales: {
@@ -1608,6 +1677,31 @@ function renderTrendChart() {
   }
   trendChartType = chartType;
 
+  // 自定义 Crosshair 插件（仅对折线图生效）
+  const crosshairPlugin = {
+    id: "trendCrosshair",
+    afterDraw: (chart) => {
+      if (chart.tooltip?._active?.length && chartType === "line") {
+        const activePoint = chart.tooltip._active[0];
+        const { ctx: chartCtx } = chart;
+        const { top, bottom } = chart.chartArea;
+        const x = activePoint.element.x;
+
+        chartCtx.save();
+        chartCtx.beginPath();
+        chartCtx.moveTo(x, top);
+        chartCtx.lineTo(x, bottom);
+        chartCtx.lineWidth = 1;
+        chartCtx.strokeStyle = isLight
+          ? "rgba(0, 0, 0, 0.15)"
+          : "rgba(255, 255, 255, 0.25)";
+        chartCtx.setLineDash([4, 4]);
+        chartCtx.stroke();
+        chartCtx.restore();
+      }
+    },
+  };
+
   if (trendChart) {
     trendChart.data.labels = labels;
     trendChart.data.datasets = datasets;
@@ -1618,6 +1712,7 @@ function renderTrendChart() {
       type: chartType,
       data: { labels, datasets },
       options,
+      plugins: [crosshairPlugin],
     });
   }
 }
