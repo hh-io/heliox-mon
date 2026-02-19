@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -38,7 +39,7 @@ func main() {
 	// 启动 HTTP 服务（传入采集器作为实时数据源）
 	server := api.NewServer(cfg, db, col)
 	go func() {
-		if err := server.Start(); err != nil {
+		if err := server.Start(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP 服务启动失败: %v", err)
 		}
 	}()

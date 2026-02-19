@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+// 预编译正则（避免每次采集重复编译）
+var (
+	rePingStats  = regexp.MustCompile(`(\d+) packets transmitted, (\d+) (?:packets )?received`)
+	rePingRTT    = regexp.MustCompile(`rtt min/avg/max/(?:mdev|stddev) = [\d.]+/([\d.]+)/`)
+	rePingRTTAlt = regexp.MustCompile(`(?:rtt|round-trip) .*?= [\d.]+/([\d.]+)/`)
+)
+
 // doCollectLatency 执行延迟采集
 func (c *Collector) doCollectLatency() {
 	now := time.Now().Unix()
@@ -69,7 +76,7 @@ func parsePingOutput(output string, expectedCount int) (*float64, int, int) {
 
 	// 解析发送/接收统计
 	// 格式: "5 packets transmitted, 5 received, 0% packet loss"
-	statsRe := regexp.MustCompile(`(\d+) packets transmitted, (\d+) (?:packets )?received`)
+	statsRe := rePingStats
 	if match := statsRe.FindStringSubmatch(output); match != nil {
 		transmitted, _ = strconv.Atoi(match[1])
 		received, _ = strconv.Atoi(match[2])
@@ -90,13 +97,13 @@ func parsePingOutput(output string, expectedCount int) (*float64, int, int) {
 
 	// 解析 RTT 统计
 	// 格式: "rtt min/avg/max/mdev = 10.123/15.456/20.789/3.214 ms"
-	rttRe := regexp.MustCompile(`rtt min/avg/max/(?:mdev|stddev) = [\d.]+/([\d.]+)/`)
+	rttRe := rePingRTT
 	if match := rttRe.FindStringSubmatch(output); match != nil {
 		avgRtt, _ = strconv.ParseFloat(match[1], 64)
 	} else {
 		// 兼容旧版本 ping 输出（可能没有 mdev）
 		// 尝试匹配 "round-trip min/avg/max = ..."
-		altRttRe := regexp.MustCompile(`(?:rtt|round-trip) .*?= [\d.]+/([\d.]+)/`)
+		altRttRe := rePingRTTAlt
 		if match := altRttRe.FindStringSubmatch(output); match != nil {
 			avgRtt, _ = strconv.ParseFloat(match[1], 64)
 		} else {

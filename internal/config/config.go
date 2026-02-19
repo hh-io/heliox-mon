@@ -180,6 +180,20 @@ func (c *Config) DataPath(name string) string {
 	return filepath.Join(c.DataDir, name)
 }
 
+// GetBillingCycleDates 根据 ResetDay 计算计费周期起止日期
+func (c *Config) GetBillingCycleDates(now time.Time) (start, end time.Time) {
+	day := c.ResetDay
+	tz := c.Timezone
+
+	if now.Day() >= day {
+		start = time.Date(now.Year(), now.Month(), day, 0, 0, 0, 0, tz)
+	} else {
+		start = time.Date(now.Year(), now.Month()-1, day, 0, 0, 0, 0, tz)
+	}
+	end = start.AddDate(0, 1, 0).Add(-time.Second)
+	return
+}
+
 func getEnv(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

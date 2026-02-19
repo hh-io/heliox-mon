@@ -3,7 +3,8 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
+	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -12,10 +13,12 @@ import (
 	"io/fs"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hh/heliox-mon/internal/config"
@@ -29,6 +32,7 @@ type Server struct {
 	db               *storage.DB
 	server           *http.Server
 	realtimeProvider RealtimeDataProvider
+	sessions         sync.Map // token -> expireTime(int64)
 }
 
 // RealtimeDataProvider 实时数据提供者接口
@@ -87,7 +91,8 @@ func (s *Server) Stop() {
 
 const (
 	authCookieName = "heliox_auth"
-	authSalt       = "heliox_static_salt_v1"
+	authSessionTTL = 30 * 24 * time.Hour // 30 天
+	authTokenBytes = 32
 )
 
 // auth 认证中间件 (Cookie + Basic Fallback)
@@ -111,7 +116,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 
 		// 3. Basic Auth 验证 (API兼容性/旧脚本)
 		user, pass, ok := r.BasicAuth()
-		if ok && user == s.cfg.Username && pass == s.cfg.Password {
+		if ok && s.checkCredentials(user, pass) {
 			next(w, r)
 			return
 		}
@@ -179,7 +184,7 @@ func (s *Server) handleLoginAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.Username != s.cfg.Username || req.Password != s.cfg.Password {
+	if !s.checkCredentials(req.Username, req.Password) {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -190,35 +195,62 @@ func (s *Server) handleLoginAPI(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		MaxAge:   86400 * 30, // 30天
-		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(authSessionTTL.Seconds()),
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) generateToken() string {
-	hash := sha256.Sum256([]byte(s.cfg.Username + ":" + s.cfg.Password + ":" + authSalt))
-	return hex.EncodeToString(hash[:])
+// checkCredentials 使用常量时间比较验证用户名和密码
+func (s *Server) checkCredentials(user, pass string) bool {
+	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.cfg.Username)) == 1
+	passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.Password)) == 1
+	return userOK && passOK
 }
 
+// generateToken 生成加密安全的随机 session token
+func (s *Server) generateToken() string {
+	b := make([]byte, authTokenBytes)
+	if _, err := rand.Read(b); err != nil {
+		log.Printf("生成 session token 失败: %v", err)
+		return ""
+	}
+	token := hex.EncodeToString(b)
+	s.sessions.Store(token, time.Now().Add(authSessionTTL).Unix())
+	return token
+}
+
+// validateToken 验证 session token 是否有效
 func (s *Server) validateToken(token string) bool {
-	return token == s.generateToken()
+	if token == "" {
+		return false
+	}
+	v, ok := s.sessions.Load(token)
+	if !ok {
+		return false
+	}
+	expire := v.(int64)
+	if time.Now().Unix() > expire {
+		s.sessions.Delete(token)
+		return false
+	}
+	return true
 }
 
 // verifyTurnstile 验证 Turnstile Token
 func (s *Server) verifyTurnstile(token string, remoteIP string) bool {
-	// 去除端口号 (IPv4/IPv6 compatibility)
-	if idx := strings.LastIndex(remoteIP, ":"); idx != -1 {
-		// 简单的判断，如果有点，可能是ipv4:port，或者ipv6 [::]:port
-		// 这里简化处理，直接透传或不传ip给cloudflare也行
-		// Cloudflare 文档说 remoteip 是可选的
+	// 正确剥离端口号 (兼容 IPv4/IPv6)
+	host, _, err := net.SplitHostPort(remoteIP)
+	if err != nil {
+		// 可能没有端口号，直接使用原始值
+		host = remoteIP
 	}
 
 	formData := url.Values{}
 	formData.Set("secret", s.cfg.TurnstileSecretKey)
 	formData.Set("response", token)
-	formData.Set("remoteip", remoteIP)
+	formData.Set("remoteip", host)
 
 	resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", formData)
 	if err != nil {
@@ -234,7 +266,6 @@ func (s *Server) verifyTurnstile(token string, remoteIP string) bool {
 
 	var result struct {
 		Success bool `json:"success"`
-		// ErrorCodes []string `json:"error-codes"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		log.Printf("Turnstile response parse error: %v", err)
@@ -246,12 +277,16 @@ func (s *Server) verifyTurnstile(token string, remoteIP string) bool {
 
 // handleStats 仪表盘汇总数据
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	tz := s.cfg.Timezone
 	now := time.Now().In(tz)
 	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
 
 	// 计算计费周期（支持 ResetDay）
-	billingStart, _ := s.getBillingCycleDates(now)
+	billingStart, _ := s.cfg.GetBillingCycleDates(now)
 	// 计算自然月（用于上月流量）
 	lastMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, tz)
 	lastMonthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, tz).Add(-time.Second)
@@ -338,24 +373,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
-// getBillingCycleDates 根据 ResetDay 计算计费周期起止日期
-func (s *Server) getBillingCycleDates(now time.Time) (start, end time.Time) {
-	day := s.cfg.ResetDay
-	tz := s.cfg.Timezone
-
-	if now.Day() >= day {
-		// 当前周期从本月 ResetDay 开始
-		start = time.Date(now.Year(), now.Month(), day, 0, 0, 0, 0, tz)
-	} else {
-		// 当前周期从上月 ResetDay 开始
-		start = time.Date(now.Year(), now.Month()-1, day, 0, 0, 0, 0, tz)
-	}
-	end = start.AddDate(0, 1, 0).Add(-time.Second)
-	return
-}
-
 // handleSystem 系统资源
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	row := s.db.QueryRow(
 		"SELECT ts, cpu_percent, mem_used, mem_total, disk_used, disk_total, load_1, load_5, load_15 FROM system_metrics ORDER BY ts DESC LIMIT 1",
 	)
@@ -387,6 +410,10 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 
 // handleTrafficDaily 每日流量
 func (s *Server) handleTrafficDaily(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	tz := s.cfg.Timezone
 	now := time.Now().In(tz)
 	rangeType := r.URL.Query().Get("range")
@@ -396,7 +423,7 @@ func (s *Server) handleTrafficDaily(w http.ResponseWriter, r *http.Request) {
 
 	switch rangeType {
 	case "cycle":
-		startDate, _ = s.getBillingCycleDates(now)
+		startDate, _ = s.cfg.GetBillingCycleDates(now)
 		endDate = now
 	default:
 		// 默认最近 30 天
@@ -436,6 +463,10 @@ func (s *Server) handleTrafficDaily(w http.ResponseWriter, r *http.Request) {
 
 // handleTrafficMonthly 月度汇总（返回近 6 个月，包含端口数据）
 func (s *Server) handleTrafficMonthly(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	tz := s.cfg.Timezone
 	now := time.Now().In(tz)
 
@@ -533,14 +564,22 @@ func (s *Server) handleTrafficRealtime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticker := time.NewTicker(1 * time.Second) // 1秒推送
-	defer ticker.Stop()
+	dataTicker := time.NewTicker(1 * time.Second)
+	defer dataTicker.Stop()
+	heartbeat := time.NewTicker(30 * time.Second) // 防止代理超时断开
+	defer heartbeat.Stop()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ticker.C:
+		case <-heartbeat.C:
+			// 心跳帧，保持连接活跃
+			if _, err := w.Write([]byte(": heartbeat\n\n")); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-dataTicker.C:
 			// 从内存读取实时网速（采集器每秒更新）
 			txSpeed, rxSpeed, ts := s.realtimeProvider.GetRealtimeSpeed()
 			if ts == 0 {
@@ -553,7 +592,9 @@ func (s *Server) handleTrafficRealtime(w http.ResponseWriter, r *http.Request) {
 				"ts":       ts,
 			}
 			jsonData, _ := json.Marshal(data)
-			w.Write([]byte("data: " + string(jsonData) + "\n\n"))
+			if _, err := w.Write([]byte("data: " + string(jsonData) + "\n\n")); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
@@ -561,6 +602,10 @@ func (s *Server) handleTrafficRealtime(w http.ResponseWriter, r *http.Request) {
 
 // handleLatency 延迟数据（支持时间范围、动态粒度聚合）
 func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	tz := s.cfg.Timezone
 	now := time.Now().In(tz)
 
@@ -726,6 +771,10 @@ func chooseLatencyGranularity(duration time.Duration) int {
 
 // handlePortTraffic 端口流量统计
 func (s *Server) handlePortTraffic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	tz := s.cfg.Timezone
 	now := time.Now().In(tz)
 	today := now.Format("2006-01-02")
@@ -734,7 +783,7 @@ func (s *Server) handlePortTraffic(w http.ResponseWriter, r *http.Request) {
 	todayEnd := todayStart.Add(24*time.Hour - time.Second)
 
 	// 计算计费周期
-	billingStart, _ := s.getBillingCycleDates(now)
+	billingStart, _ := s.cfg.GetBillingCycleDates(now)
 	lastMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, tz)
 	lastMonthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, tz).Add(-time.Second)
 

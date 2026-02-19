@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// 预编译正则（避免每次采集重复编译）
+var reIptablesCounter = regexp.MustCompile(`\[(\d+):(\d+)\] -A HELIOX_STATS\s+-p\s+(tcp|udp)\s+.*--(dport|sport)\s+(\d+)`)
+
 // collectRealtimeSpeed 每秒采集流量并计算实时网速（只更新内存，不写数据库）
 func (c *Collector) collectRealtimeSpeed() {
 	defer c.wg.Done()
@@ -288,13 +291,10 @@ func (c *Collector) readIptablesPortsTraffic(ports []int) (map[int]portCounters,
 	}
 
 	// 正则匹配：[pkts:bytes] -A HELIOX_STATS -p tcp -m tcp --(dport|sport) 443
-	// 注意：HELIOX_STATS 和 -p 之间可能没有额外内容，使用 .* 而非 .+
-	re := regexp.MustCompile(`\[(\d+):(\d+)\] -A HELIOX_STATS\s+-p\s+(tcp|udp)\s+.*--(dport|sport)\s+(\d+)`)
-
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
 		line := scanner.Text()
-		match := re.FindStringSubmatch(line)
+		match := reIptablesCounter.FindStringSubmatch(line)
 		if match == nil {
 			continue
 		}
@@ -400,29 +400,4 @@ func (c *Collector) readIptablesPortTraffic(port int) (tx, rx uint64, err error)
 		return 0, 0, fmt.Errorf("iptables 规则不存在: port %d", port)
 	}
 	return stats.tx, stats.rx, nil
-}
-
-// getIptablesBytes 解析 iptables 输出获取字节数
-func (c *Collector) getIptablesBytes(chain, portType string, port int) (uint64, error) {
-	cmd := exec.Command("iptables", "-L", chain, "-n", "-v", "-x")
-	output, err := cmd.Output()
-	if err != nil {
-		return 0, fmt.Errorf("iptables 命令执行失败: %w", err)
-	}
-
-	// 查找匹配的行：... dpt:443 或 spt:443
-	target := fmt.Sprintf("%s:%d", portType, port)
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, target) {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				bytes, _ := strconv.ParseUint(fields[1], 10, 64)
-				return bytes, nil
-			}
-		}
-	}
-	// 规则不存在时返回特定错误
-	return 0, fmt.Errorf("iptables 规则不存在: %s:%d", portType, port)
 }

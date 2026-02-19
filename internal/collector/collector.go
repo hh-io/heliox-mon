@@ -243,11 +243,13 @@ func (c *Collector) aggregateDailyTraffic(date string) {
 	}
 
 	// 插入或更新日汇总
-	_, _ = c.db.Exec(`
+	if _, err := c.db.Exec(`
 		INSERT INTO traffic_daily (date, iface, tx_bytes, rx_bytes)
 		VALUES (?, 'total', ?, ?)
 		ON CONFLICT(date, iface) DO UPDATE SET tx_bytes = excluded.tx_bytes, rx_bytes = excluded.rx_bytes
-	`, date, tx, rx)
+	`, date, tx, rx); err != nil {
+		log.Printf("写入日汇总流量失败 [%s]: %v", date, err)
+	}
 }
 
 // aggregatePortDailyTraffic 汇总端口流量
@@ -275,11 +277,13 @@ func (c *Collector) aggregatePortDailyTraffic(date string) {
 			continue
 		}
 
-		_, _ = c.db.Exec(`
+		if _, err := c.db.Exec(`
 			INSERT INTO port_traffic_daily (date, port, tx_bytes, rx_bytes)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(date, port) DO UPDATE SET tx_bytes = excluded.tx_bytes, rx_bytes = excluded.rx_bytes
-		`, date, port, tx, rx)
+		`, date, port, tx, rx); err != nil {
+			log.Printf("写入端口日汇总流量失败 [%s port %d]: %v", date, port, err)
+		}
 	}
 }
 
@@ -287,7 +291,9 @@ func (c *Collector) aggregatePortDailyTraffic(date string) {
 func (c *Collector) aggregateLatencyData() {
 	// 删除 7 天前的原始数据，保留聚合数据
 	cutoff := time.Now().Add(-7 * 24 * time.Hour).Unix()
-	_, _ = c.db.Exec("DELETE FROM latency_records WHERE ts < ? AND is_aggregated = 0", cutoff)
+	if _, err := c.db.Exec("DELETE FROM latency_records WHERE ts < ? AND is_aggregated = 0", cutoff); err != nil {
+		log.Printf("清理延迟原始数据失败: %v", err)
+	}
 }
 
 // cleanupOldSnapshots 清理过期快照
@@ -296,8 +302,12 @@ func (c *Collector) cleanupOldSnapshots() {
 	now := time.Now().In(c.cfg.Timezone)
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, c.cfg.Timezone)
 	cutoff := todayStart.AddDate(0, 0, -1).Unix()
-	_, _ = c.db.Exec("DELETE FROM traffic_snapshots WHERE ts < ?", cutoff)
-	_, _ = c.db.Exec("DELETE FROM port_traffic_snapshots WHERE ts < ?", cutoff)
+	if _, err := c.db.Exec("DELETE FROM traffic_snapshots WHERE ts < ?", cutoff); err != nil {
+		log.Printf("清理流量快照失败: %v", err)
+	}
+	if _, err := c.db.Exec("DELETE FROM port_traffic_snapshots WHERE ts < ?", cutoff); err != nil {
+		log.Printf("清理端口流量快照失败: %v", err)
+	}
 }
 
 // checkQuotaAndNotify 检查流量配额并发送通知
@@ -306,8 +316,7 @@ func (c *Collector) checkQuotaAndNotify(now time.Time) {
 		return
 	}
 
-	// 获取计费周期
-	billingStart, billingEnd := c.getBillingCycleDates(now)
+	billingStart, billingEnd := c.cfg.GetBillingCycleDates(now)
 
 	// 查询本月已用流量（按 tx/rx 分开计算）
 	var tx, rx int64
@@ -357,19 +366,4 @@ func (c *Collector) checkQuotaAndNotify(now time.Time) {
 			}
 		}
 	}
-}
-
-// getBillingCycleDates 计算计费周期
-func (c *Collector) getBillingCycleDates(now time.Time) (start, end time.Time) {
-	day := c.cfg.ResetDay
-	tz := c.cfg.Timezone
-
-	if now.Day() >= day {
-		start = time.Date(now.Year(), now.Month(), day, 0, 0, 0, 0, tz)
-		end = time.Date(now.Year(), now.Month()+1, day, 0, 0, 0, 0, tz).Add(-time.Second)
-	} else {
-		start = time.Date(now.Year(), now.Month()-1, day, 0, 0, 0, 0, tz)
-		end = time.Date(now.Year(), now.Month(), day, 0, 0, 0, 0, tz).Add(-time.Second)
-	}
-	return
 }

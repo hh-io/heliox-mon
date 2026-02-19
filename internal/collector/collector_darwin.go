@@ -62,6 +62,34 @@ func (c *Collector) initTrafficOffsets() {
 	log.Println("[Mock] 初始化计数器偏移量... (Skip)")
 }
 
+// collectRealtimeSpeed 模拟实时网速采集
+func (c *Collector) collectRealtimeSpeed() {
+	defer c.wg.Done()
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-ticker.C:
+			tx := rand.Float64() * 5 * 1024 * 1024  // 0-5 MB/s
+			rx := rand.Float64() * 10 * 1024 * 1024 // 0-10 MB/s
+			now := time.Now().Unix()
+
+			c.realtimeMu.Lock()
+			c.realtimeSnapshot = RealtimeSnapshot{
+				Ts:      now,
+				TxBytes: c.lastTotalTx,
+				RxBytes: c.lastTotalRx,
+				TxSpeed: tx,
+				RxSpeed: rx,
+			}
+			c.realtimeMu.Unlock()
+		}
+	}
+}
+
 // doCollectSystemMetrics 模拟系统资源采集
 func (c *Collector) doCollectSystemMetrics() {
 	now := time.Now().Unix()
@@ -92,12 +120,10 @@ func (c *Collector) doCollectLatency() {
 	for _, target := range c.cfg.PingTargets {
 		// 模拟 10ms - 300ms 随机延迟
 		rtt := 10.0 + rand.Float64()*290.0
-		// 偶尔丢包 (packet loss = 0 in mock currently for simplicity, just timeout logic simulation)
-		// 这里只记录成功的
 
 		_, err := c.db.Exec(
-			"INSERT INTO latency_stats (ts, target_tag, target_ip, rtt_ms, packet_loss) VALUES (?, ?, ?, ?, ?)",
-			now, target.Tag, target.IP, rtt, 0.0,
+			"INSERT INTO latency_records (ts, target, rtt_ms, sent, lost, is_aggregated) VALUES (?, ?, ?, ?, ?, 0)",
+			now, target.Tag, rtt, 5, 0,
 		)
 		if err != nil {
 			log.Printf("[Mock] 保存延迟数据失败: %v", err)
