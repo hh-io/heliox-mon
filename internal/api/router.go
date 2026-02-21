@@ -660,7 +660,7 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 			WHERE target = ? AND ts >= ? AND ts <= ?
 			GROUP BY bucket_ts
 			ORDER BY bucket_ts
-		`, granularitySec, granularitySec, pt.Tag, startTs, endTs)
+		`, granularitySec, granularitySec, pt.IP, startTs, endTs)
 		if err != nil {
 			continue
 		}

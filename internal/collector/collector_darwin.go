@@ -123,7 +123,7 @@ func (c *Collector) doCollectLatency() {
 
 		_, err := c.db.Exec(
 			"INSERT INTO latency_records (ts, target, rtt_ms, sent, lost, is_aggregated) VALUES (?, ?, ?, ?, ?, 0)",
-			now, target.Tag, rtt, 5, 0,
+			now, target.IP, rtt, 5, 0,
 		)
 		if err != nil {
 			log.Printf("[Mock] 保存延迟数据失败: %v", err)

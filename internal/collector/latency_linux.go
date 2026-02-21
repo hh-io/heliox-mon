@@ -23,10 +23,10 @@ func (c *Collector) doCollectLatency() {
 	for _, target := range c.cfg.PingTargets {
 		rttMs, sent, lost := c.pingStats(target.IP)
 
-		// 使用 tag 作为 target 标识
+		// 使用 IP 作为 target 标识（解耦显示名称）
 		_, dbErr := c.db.Exec(
 			"INSERT INTO latency_records (ts, target, rtt_ms, sent, lost, is_aggregated) VALUES (?, ?, ?, ?, ?, 0)",
-			now, target.Tag, rttMs, sent, lost,
+			now, target.IP, rttMs, sent, lost,
 		)
 		if dbErr != nil {
 			log.Printf("保存延迟记录失败: %v", dbErr)
