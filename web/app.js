@@ -535,14 +535,20 @@ function updateRealtimeScale() {
 }
 
 function updateRealtimeAverage() {
-  const avgEl = document.getElementById("avg-speed");
-  if (!avgEl) return;
-  let sum = 0;
+  const txEl = document.getElementById("avg-tx");
+  const rxEl = document.getElementById("avg-rx");
+  if (!txEl && !rxEl) return;
+
+  let txSum = 0, rxSum = 0;
   for (let i = 0; i < realtimeTxSeries.length; i++) {
-    sum += realtimeTxSeries[i];
+    txSum += realtimeTxSeries[i];
+    rxSum += realtimeRxSeries[i];
   }
-  const avg = sum / realtimeTxSeries.length;
-  avgEl.textContent = formatSpeed(avg);
+  const txAvg = txSum / realtimeTxSeries.length;
+  const rxAvg = rxSum / realtimeRxSeries.length;
+
+  if (txEl) txEl.textContent = `↑ ${formatSpeed(txAvg)}`;
+  if (rxEl) rxEl.textContent = `↓ ${formatSpeed(rxAvg)}`;
 }
 
 function pushRealtimePoint(txSpeed, rxSpeed) {
