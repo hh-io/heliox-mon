@@ -18,7 +18,6 @@ function formatSpeed(bytesPerSec) {
   return (bytesPerSec / 1024 / 1024 / 1024).toFixed(2) + " GB/s";
 }
 
-
 function formatTimeLabel(date) {
   const m = String(date.getMinutes()).padStart(2, "0");
   const s = String(date.getSeconds()).padStart(2, "0");
@@ -494,7 +493,6 @@ function initRealtimeChart() {
       },
     },
   });
-
 }
 
 function applyRealtimeTheme() {
@@ -539,7 +537,8 @@ function updateRealtimeAverage() {
   const rxEl = document.getElementById("avg-rx");
   if (!txEl && !rxEl) return;
 
-  let txSum = 0, rxSum = 0;
+  let txSum = 0,
+    rxSum = 0;
   for (let i = 0; i < realtimeTxSeries.length; i++) {
     txSum += realtimeTxSeries[i];
     rxSum += realtimeRxSeries[i];
@@ -547,8 +546,8 @@ function updateRealtimeAverage() {
   const txAvg = txSum / realtimeTxSeries.length;
   const rxAvg = rxSum / realtimeRxSeries.length;
 
-  if (txEl) txEl.textContent = `↑ ${formatSpeed(txAvg)}`;
-  if (rxEl) rxEl.textContent = `↓ ${formatSpeed(rxAvg)}`;
+  if (txEl) txEl.innerHTML = `<span>↑</span><span>${formatSpeed(txAvg)}</span>`;
+  if (rxEl) rxEl.innerHTML = `<span>↓</span><span>${formatSpeed(rxAvg)}</span>`;
 }
 
 function pushRealtimePoint(txSpeed, rxSpeed) {
@@ -1442,7 +1441,12 @@ function renderTrendChart() {
       const chart = context.chart;
       const { chartArea } = chart;
       if (!chartArea) return "rgba(10, 132, 255, 0.2)";
-      const gradient = chart.ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+      const gradient = chart.ctx.createLinearGradient(
+        0,
+        chartArea.top,
+        0,
+        chartArea.bottom,
+      );
       gradient.addColorStop(0, "rgba(10, 132, 255, 0.40)");
       gradient.addColorStop(1, "rgba(10, 132, 255, 0.05)");
       return gradient;
@@ -1452,14 +1456,16 @@ function renderTrendChart() {
     const pointRadii = totals.map((_, i) => (i === totals.length - 1 ? 6 : 0));
     const pointHoverRadii = totals.map(() => 6); // 悬停时所有点都高亮
     const pointBgColors = totals.map((_, i) =>
-      i === totals.length - 1 ? "#007AFF" : "transparent"
+      i === totals.length - 1 ? "#007AFF" : "transparent",
     );
     const pointHoverBgColors = totals.map(() => "#007AFF"); // 悬停时蓝色
     const pointBorderColors = totals.map((_, i) =>
-      i === totals.length - 1 ? "#fff" : "transparent"
+      i === totals.length - 1 ? "#fff" : "transparent",
     );
     const pointHoverBorderColors = totals.map(() => "#fff");
-    const pointBorderWidths = totals.map((_, i) => (i === totals.length - 1 ? 2 : 0));
+    const pointBorderWidths = totals.map((_, i) =>
+      i === totals.length - 1 ? 2 : 0,
+    );
 
     // 计算极值索引
     const maxIdx = totals.indexOf(Math.max(...totals));
@@ -1488,7 +1494,10 @@ function renderTrendChart() {
 
     // 今日流量数值（最后一个点）
     const todayValue = totals[totals.length - 1];
-    const todayLabel = todayValue >= 1 ? `${todayValue.toFixed(1)} GB` : `${(todayValue * 1024).toFixed(0)} MB`;
+    const todayLabel =
+      todayValue >= 1
+        ? `${todayValue.toFixed(1)} GB`
+        : `${(todayValue * 1024).toFixed(0)} MB`;
 
     legendHtml = `
       <span class="legend-item"><span class="dot" style="background:#007AFF"></span>总流量</span>
@@ -1621,20 +1630,25 @@ function renderTrendChart() {
         mode: "index",
         intersect: false,
         callbacks: tooltipCallbacks,
-        backgroundColor: isLight ? "rgba(255, 255, 255, 0.95)" : "rgba(28, 28, 30, 0.95)",
+        backgroundColor: isLight
+          ? "rgba(255, 255, 255, 0.95)"
+          : "rgba(28, 28, 30, 0.95)",
         titleColor: isLight ? "#1c1c1e" : "#f5f5f7",
         bodyColor: isLight ? "#1c1c1e" : "#f5f5f7",
         footerColor: isLight ? "#86868b" : "#8E8E93",
-        borderColor: isLight ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)",
+        borderColor: isLight
+          ? "rgba(0, 0, 0, 0.1)"
+          : "rgba(255, 255, 255, 0.1)",
         borderWidth: 1,
         cornerRadius: 8,
         padding: 12,
         displayColors: false,
         titleFont: { weight: "600" },
       },
-      annotation: Object.keys(annotationsConfig).length > 0
-        ? { annotations: annotationsConfig }
-        : undefined,
+      annotation:
+        Object.keys(annotationsConfig).length > 0
+          ? { annotations: annotationsConfig }
+          : undefined,
     },
     scales: {
       x: {
