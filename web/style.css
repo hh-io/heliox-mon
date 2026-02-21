@@ -505,7 +505,7 @@ body.theme-light .section-title {
 }
 
 .avg-val > span:nth-child(2) {
-  text-align: right;
+  text-align: left;
 }
 
 .avg-val > span:nth-child(3) {
