@@ -907,10 +907,13 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(path, ".html"):
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
 	case strings.HasSuffix(path, ".css"):
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
 	case strings.HasSuffix(path, ".js"):
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
 	}
 
 	data, err := fs.ReadFile(web.Assets, path)
