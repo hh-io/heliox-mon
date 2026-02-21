@@ -1039,6 +1039,8 @@ function renderLatencyStats() {
           </div>
           <div class="latency-target-values">
             <span>均值 <strong>${formatNumber(stats.avg)}</strong>ms</span>
+            <span>P95 <strong>${formatNumber(stats.p95)}</strong>ms</span>
+            <span>抖动 <strong>${formatNumber(stats.jitter)}</strong>ms</span>
             <span>最小 <strong>${formatNumber(stats.min)}</strong>ms</span>
             <span>最大 <strong>${formatNumber(stats.max)}</strong>ms</span>
             <span>丢包 <strong>${formatPercent(stats.lossRate)}</strong></span>
@@ -1210,6 +1212,12 @@ function computeTargetStats(points, range) {
   let max = -Infinity;
   let sent = 0;
   let lost = 0;
+  
+  let validRtts = [];
+  let jitterSum = 0;
+  let jitterCount = 0;
+  let prevRtt = null;
+
   const start = range?.start ?? null;
   const end = range?.end ?? null;
 
@@ -1220,8 +1228,20 @@ function computeTargetStats(points, range) {
     if (p.rtt_ms !== null && p.rtt_ms !== undefined) {
       sum += p.rtt_ms;
       count += 1;
+      validRtts.push(p.rtt_ms);
+
       if (p.rtt_ms < min) min = p.rtt_ms;
       if (p.rtt_ms > max) max = p.rtt_ms;
+
+      // Jitter calculation
+      if (prevRtt !== null) {
+        jitterSum += Math.abs(p.rtt_ms - prevRtt);
+        jitterCount += 1;
+      }
+      prevRtt = p.rtt_ms;
+    } else {
+      // Missing point (e.g. timeout) breaks the jitter sequence
+      prevRtt = null;
     }
     if (p.sent !== undefined && p.sent !== null) {
       sent += p.sent;
@@ -1229,8 +1249,17 @@ function computeTargetStats(points, range) {
     }
   });
 
+  let p95 = null;
+  if (validRtts.length > 0) {
+    validRtts.sort((a, b) => a - b);
+    const idx = Math.floor(validRtts.length * 0.95);
+    p95 = validRtts[idx];
+  }
+
   return {
     avg: count ? sum / count : null,
+    p95: p95,
+    jitter: jitterCount ? jitterSum / jitterCount : null,
     min: min === Infinity ? null : min,
     max: max === -Infinity ? null : max,
     count,
