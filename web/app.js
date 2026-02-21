@@ -805,8 +805,8 @@ function renderLatencyChart() {
     : "rgba(104, 180, 140, 0.5)"; // 柔和绿 - 最低值
 
   const series = latencyData.targets
-    .filter((target) => activeTags.has(target.tag))
     .map((target, idx) => {
+      if (!activeTags.has(target.tag)) return null;
       const color = latencyColors[idx % latencyColors.length];
       const points = target.points || [];
       const data = points.map((p) => [
@@ -878,7 +878,8 @@ function renderLatencyChart() {
             }
           : undefined,
       };
-    });
+    })
+    .filter(Boolean);
 
   latencyLossSeries = buildLossSeries(latencyData.targets);
   if (showLoss && latencyLossSeries.length) {
