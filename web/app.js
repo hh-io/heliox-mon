@@ -603,13 +603,14 @@ let latencyStatsRaf = null;
 let latencyLossSeries = [];
 const latencyLossThreshold = 1.0;
 const latencyColors = [
-  { border: "#8FB0B8", bg: "rgba(143, 176, 184, 0.16)" }, // Muted teal
-  { border: "#9BB59B", bg: "rgba(155, 181, 155, 0.16)" }, // Muted green
-  { border: "#9AA5C8", bg: "rgba(154, 165, 200, 0.16)" }, // Muted blue
-  { border: "#C1A3C8", bg: "rgba(193, 163, 200, 0.16)" }, // Muted purple
-  { border: "#C4A098", bg: "rgba(196, 160, 152, 0.16)" }, // Muted red
+  { border: "#0A84FF", bg: "rgba(10, 132, 255, 0.16)" }, // Blue
+  { border: "#30D158", bg: "rgba(48, 209, 88, 0.16)" },  // Green
+  { border: "#FF9F0A", bg: "rgba(255, 159, 10, 0.16)" }, // Orange
+  { border: "#BF5AF2", bg: "rgba(191, 90, 242, 0.16)" }, // Purple
+  { border: "#64D2FF", bg: "rgba(100, 210, 255, 0.16)" },// Cyan
+  { border: "#FF375F", bg: "rgba(255, 55, 95, 0.16)" },  // Pink
 ];
-const latencyLossColor = { border: "#C7A3A0", bg: "rgba(199, 163, 160, 0.12)" };
+const latencyLossColor = { border: "#FF453A", bg: "rgba(255, 69, 58, 0.12)" };
 
 // 延迟查询参数
 let latencyStartDate = null;
@@ -822,6 +823,7 @@ function renderLatencyChart() {
         smooth: true,
         showSymbol: false,
         data,
+        itemStyle: { color: color.border },
         lineStyle: { color: color.border, width: 2 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -890,6 +892,7 @@ function renderLatencyChart() {
       smooth: true,
       showSymbol: false,
       data: latencyLossSeries.map((p) => [p.ts, p.loss]),
+      itemStyle: { color: latencyLossColor.border },
       lineStyle: { color: latencyLossColor.border, width: 1.5 },
       areaStyle: { color: latencyLossColor.bg },
       emphasis: { focus: "series" },
