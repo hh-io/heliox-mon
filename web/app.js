@@ -18,6 +18,13 @@ function formatSpeed(bytesPerSec) {
   return (bytesPerSec / 1024 / 1024 / 1024).toFixed(2) + " GB/s";
 }
 
+function formatSpeedParts(bytesPerSec) {
+  if (bytesPerSec < 1024) return [bytesPerSec.toFixed(1), "B/s"];
+  if (bytesPerSec < 1024 * 1024) return [(bytesPerSec / 1024).toFixed(1), "KB/s"];
+  if (bytesPerSec < 1024 * 1024 * 1024) return [(bytesPerSec / 1024 / 1024).toFixed(2), "MB/s"];
+  return [(bytesPerSec / 1024 / 1024 / 1024).toFixed(2), "GB/s"];
+}
+
 function formatTimeLabel(date) {
   const m = String(date.getMinutes()).padStart(2, "0");
   const s = String(date.getSeconds()).padStart(2, "0");
@@ -546,8 +553,10 @@ function updateRealtimeAverage() {
   const txAvg = txSum / realtimeTxSeries.length;
   const rxAvg = rxSum / realtimeRxSeries.length;
 
-  if (txEl) txEl.innerHTML = `<span>↑</span><span>${formatSpeed(txAvg)}</span>`;
-  if (rxEl) rxEl.innerHTML = `<span>↓</span><span>${formatSpeed(rxAvg)}</span>`;
+  const [txNum, txUnit] = formatSpeedParts(txAvg);
+  const [rxNum, rxUnit] = formatSpeedParts(rxAvg);
+  if (txEl) txEl.innerHTML = `<span>↑</span><span>${txNum}</span><span>${txUnit}</span>`;
+  if (rxEl) rxEl.innerHTML = `<span>↓</span><span>${rxNum}</span><span>${rxUnit}</span>`;
 }
 
 function pushRealtimePoint(txSpeed, rxSpeed) {
