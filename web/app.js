@@ -1631,6 +1631,11 @@ function renderTrendChart() {
         const arrow = diff > 0 ? "↑" : "↓";
         return `  ${arrow} 较均值 ${sign}${diff.toFixed(0)}%`;
       },
+      labelColor: (ctx) => {
+        const colors = { "总流量": "#007AFF", "上传": "#4F7DF7", "下载": "#39D0C3" };
+        const c = colors[ctx.dataset.label] || "#888";
+        return { borderColor: c, backgroundColor: c };
+      },
     };
 
     // 平均参考线注解 + Avg 标签
