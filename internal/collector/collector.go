@@ -173,7 +173,8 @@ func (c *Collector) collectLatency() {
 func (c *Collector) runDailyAggregation() {
 	defer c.wg.Done()
 
-	// 启动时立即执行一次汇总
+	// 延迟执行首次汇总，避免与其他 goroutine 初始化并发导致 SQLite 锁冲突
+	time.Sleep(3 * time.Second)
 	c.doDailyAggregation()
 
 	ticker := time.NewTicker(1 * time.Minute) // 每分钟更新日汇总
