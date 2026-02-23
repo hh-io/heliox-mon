@@ -20,8 +20,10 @@ function formatSpeed(bytesPerSec) {
 
 function formatSpeedParts(bytesPerSec) {
   if (bytesPerSec < 1024) return [bytesPerSec.toFixed(1), "B/s"];
-  if (bytesPerSec < 1024 * 1024) return [(bytesPerSec / 1024).toFixed(1), "KB/s"];
-  if (bytesPerSec < 1024 * 1024 * 1024) return [(bytesPerSec / 1024 / 1024).toFixed(2), "MB/s"];
+  if (bytesPerSec < 1024 * 1024)
+    return [(bytesPerSec / 1024).toFixed(1), "KB/s"];
+  if (bytesPerSec < 1024 * 1024 * 1024)
+    return [(bytesPerSec / 1024 / 1024).toFixed(2), "MB/s"];
   return [(bytesPerSec / 1024 / 1024 / 1024).toFixed(2), "GB/s"];
 }
 
@@ -555,8 +557,10 @@ function updateRealtimeAverage() {
 
   const [txNum, txUnit] = formatSpeedParts(txAvg);
   const [rxNum, rxUnit] = formatSpeedParts(rxAvg);
-  if (txEl) txEl.innerHTML = `<span>↑</span><span>${txNum}</span><span>${txUnit}</span>`;
-  if (rxEl) rxEl.innerHTML = `<span>↓</span><span>${rxNum}</span><span>${rxUnit}</span>`;
+  if (txEl)
+    txEl.innerHTML = `<span>↑</span><span>${txNum}</span><span>${txUnit}</span>`;
+  if (rxEl)
+    rxEl.innerHTML = `<span>↓</span><span>${rxNum}</span><span>${rxUnit}</span>`;
 }
 
 function pushRealtimePoint(txSpeed, rxSpeed) {
@@ -604,11 +608,11 @@ let latencyLossSeries = [];
 const latencyLossThreshold = 1.0;
 const latencyColors = [
   { border: "#0A84FF", bg: "rgba(10, 132, 255, 0.16)" }, // Blue
-  { border: "#30D158", bg: "rgba(48, 209, 88, 0.16)" },  // Green
+  { border: "#30D158", bg: "rgba(48, 209, 88, 0.16)" }, // Green
   { border: "#FF9F0A", bg: "rgba(255, 159, 10, 0.16)" }, // Orange
   { border: "#BF5AF2", bg: "rgba(191, 90, 242, 0.16)" }, // Purple
-  { border: "#64D2FF", bg: "rgba(100, 210, 255, 0.16)" },// Cyan
-  { border: "#FF375F", bg: "rgba(255, 55, 95, 0.16)" },  // Pink
+  { border: "#64D2FF", bg: "rgba(100, 210, 255, 0.16)" }, // Cyan
+  { border: "#FF375F", bg: "rgba(255, 55, 95, 0.16)" }, // Pink
 ];
 const latencyLossColor = { border: "#FF453A", bg: "rgba(255, 69, 58, 0.12)" };
 
@@ -1212,7 +1216,7 @@ function computeTargetStats(points, range) {
   let max = -Infinity;
   let sent = 0;
   let lost = 0;
-  
+
   let validRtts = [];
   let jitterSum = 0;
   let jitterCount = 0;
@@ -1470,9 +1474,16 @@ function renderTrendChart() {
     // 完整日期标签（用于 tooltip）
     labels = source.map((d) => d.date.slice(5));
     const totals = source.map((d) => (d.tx + d.rx) / 1024 / 1024 / 1024);
+    const txData = source.map((d) => d.tx / 1024 / 1024 / 1024);
+    const rxData = source.map((d) => d.rx / 1024 / 1024 / 1024);
 
     // 计算平均值用于参考线
     const avgValue = totals.reduce((a, b) => a + b, 0) / totals.length;
+
+    // 汇总总量
+    const sumTotal = totals.reduce((a, b) => a + b, 0);
+    const sumTx = txData.reduce((a, b) => a + b, 0);
+    const sumRx = rxData.reduce((a, b) => a + b, 0);
 
     // 计算 Y 轴动态范围
     const maxValue = Math.max(...totals, avgValue);
@@ -1529,10 +1540,42 @@ function renderTrendChart() {
         pointHoverBorderColor: pointHoverBorderColors,
         pointBorderWidth: pointBorderWidths,
         tension: 0.4,
-        cubicInterpolationMode: "monotone", // Monotone X 插值
+        cubicInterpolationMode: "monotone",
         fill: true,
       },
+      {
+        label: "上传",
+        data: txData,
+        borderColor: "rgba(79, 125, 247, 0.6)",
+        backgroundColor: "transparent",
+        borderWidth: 1.5,
+        borderDash: [4, 3],
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointHoverBackgroundColor: "#4F7DF7",
+        tension: 0.4,
+        cubicInterpolationMode: "monotone",
+        fill: false,
+      },
+      {
+        label: "下载",
+        data: rxData,
+        borderColor: "rgba(57, 208, 195, 0.6)",
+        backgroundColor: "transparent",
+        borderWidth: 1.5,
+        borderDash: [4, 3],
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointHoverBackgroundColor: "#39D0C3",
+        tension: 0.4,
+        cubicInterpolationMode: "monotone",
+        fill: false,
+      },
     ];
+
+    // 格式化汇总值
+    const fmtSum = (v) =>
+      v >= 1 ? `${v.toFixed(1)} GB` : `${(v * 1024).toFixed(0)} MB`;
 
     // 今日流量数值（最后一个点）
     const todayValue = totals[totals.length - 1];
@@ -1542,8 +1585,10 @@ function renderTrendChart() {
         : `${(todayValue * 1024).toFixed(0)} MB`;
 
     legendHtml = `
-      <span class="legend-item"><span class="dot" style="background:#007AFF"></span>总流量</span>
-      <span class="legend-item"><span class="dot" style="background:#86868b; opacity:0.6"></span>平均 ${avgValue.toFixed(2)} GB</span>
+      <span class="legend-item"><span class="dot" style="background:#007AFF"></span>总流量 ${fmtSum(sumTotal)}</span>
+      <span class="legend-item"><span class="dot" style="background:#4F7DF7; opacity:0.6"></span>↑ ${fmtSum(sumTx)}</span>
+      <span class="legend-item"><span class="dot" style="background:#39D0C3; opacity:0.6"></span>↓ ${fmtSum(sumRx)}</span>
+      <span class="legend-item"><span class="dot" style="background:#86868b; opacity:0.6"></span>日均 ${avgValue.toFixed(2)} GB</span>
       <span class="legend-item trend-today-badge"><span class="trend-today-pulse"></span>今日 ${todayLabel}</span>
     `;
     chartType = "line";
