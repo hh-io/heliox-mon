@@ -352,7 +352,8 @@
                 window.location.href = "/";
               }, 500);
             } else {
-              errorMsg.textContent = "用户名或密码错误";
+              errorMsg.textContent =
+                res.status === 403 ? "请先完成人机验证" : "用户名或密码错误";
               errorMsg.classList.add("show");
               btn.disabled = false;
               btn.style.opacity = "1";
