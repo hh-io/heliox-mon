@@ -914,6 +914,8 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(path, ".js"):
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
+	case strings.HasSuffix(path, ".svg"):
+		w.Header().Set("Content-Type", "image/svg+xml")
 	}
 
 	data, err := fs.ReadFile(web.Assets, path)
