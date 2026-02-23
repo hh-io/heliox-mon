@@ -1605,37 +1605,31 @@ function renderTrendChart() {
     // 星期名称映射
     const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-    // Tooltip 回调 - 显示完整日期+星期+趋势对比
+    // Tooltip 回调 - 每条线显示自己的数据
     tooltipCallbacks = {
       title: (items) => {
         const idx = items[0]?.dataIndex;
         if (idx === undefined) return "";
         const d = source[idx];
         if (!d) return "";
-        // 解析日期获取星期
         const dateObj = new Date(d.date);
         const weekday = weekdays[dateObj.getDay()];
         return `${d.date} (${weekday})`;
       },
       label: (ctx) => {
-        const d = source[ctx.dataIndex];
-        if (!d) {
-          return `总量: ${ctx.raw.toFixed(2)} GB`;
-        }
-        const total = (d.tx + d.rx) / 1024 / 1024 / 1024;
-        const up = d.tx / 1024 / 1024 / 1024;
-        const down = d.rx / 1024 / 1024 / 1024;
-        return `总量: ${total.toFixed(2)} GB (↑${up.toFixed(2)}, ↓${down.toFixed(2)})`;
+        const val = ctx.raw;
+        const fmt = val >= 1 ? `${val.toFixed(2)} GB` : `${(val * 1024).toFixed(0)} MB`;
+        return ` ${ctx.dataset.label}: ${fmt}`;
       },
       afterLabel: (ctx) => {
-        // 趋势对比：与均值的差距
-        const val = ctx.raw;
+        // 仅总流量行显示较均值对比
+        if (ctx.dataset.label !== "总流量") return "";
         if (avgValue <= 0) return "";
-        const diff = ((val - avgValue) / avgValue) * 100;
-        if (Math.abs(diff) < 1) return "≈ 均值";
+        const diff = ((ctx.raw - avgValue) / avgValue) * 100;
+        if (Math.abs(diff) < 1) return "  ≈ 均值";
         const sign = diff > 0 ? "+" : "";
-        const color = diff > 0 ? "↑" : "↓";
-        return `${color} 较均值 ${sign}${diff.toFixed(0)}%`;
+        const arrow = diff > 0 ? "↑" : "↓";
+        return `  ${arrow} 较均值 ${sign}${diff.toFixed(0)}%`;
       },
     };
 
@@ -1729,7 +1723,9 @@ function renderTrendChart() {
         borderWidth: 1,
         cornerRadius: 8,
         padding: 12,
-        displayColors: false,
+        displayColors: true,
+        usePointStyle: true,
+        boxPadding: 4,
         titleFont: { weight: "600" },
       },
       annotation:
