@@ -39,12 +39,25 @@ cat /opt/heliox-mon/.env | grep PASS
 
 ### 访问
 
+浏览器打开站点会跳转到登录页（`/login`），输入用户名/密码后通过 Cookie 会话保持登录（有效期 30 天）。脚本/命令行可继续使用 Basic Auth：
+
 ```bash
-# 本地测试
+# 命令行（Basic Auth，兼容旧脚本）
 curl -u admin:密码 http://127.0.0.1:9100/api/system
 
 # 通过 Cloudflare Tunnel 外部访问（配置 URL: http://host.docker.internal:9100）
 ```
+
+---
+
+## 认证与安全
+
+- **登录会话**：Web 登录使用加密随机 token + HttpOnly Cookie，过期会话定时清理。
+- **Basic Auth 回退**：`/api/*` 同时接受 Basic Auth，便于脚本与监控集成。
+- **常量时间比较**：用户名/密码校验使用 `crypto/subtle`，防时序攻击。
+- **Cloudflare Turnstile**（可选）：设置 `HELIOX_TURNSTILE_SECRET` 后，登录需通过人机验证，校验失败按「拒绝」处理（fail-secure）。
+- **Secure Cookie**：经 HTTPS（含 Cloudflare Tunnel 的 `X-Forwarded-Proto`）访问时自动启用 `Secure` 标志。
+- 建议监听 `127.0.0.1`，仅通过 Cloudflare Tunnel 等反向代理对外暴露。
 
 ---
 
@@ -69,16 +82,26 @@ uninstall  # 卸载
 
 配置文件：`/opt/heliox-mon/.env`
 
-| 变量                 | 说明           | 默认值                            |
-| -------------------- | -------------- | --------------------------------- |
-| `HELIOX_MON_PASS`    | 密码           | 自动生成                          |
-| `SERVER_NAME`        | 服务器标识     | 主机名                            |
-| `HELIOX_MON_TZ`      | 时区           | Asia/Shanghai                     |
-| `MONTHLY_LIMIT_GB`   | 月流量限额(GB) | 1000                              |
-| `BILLING_MODE`       | 计费模式       | bidirectional                     |
-| `RESET_DAY`          | 计费周期重置日 | 1 (每月1号)                       |
-| `TELEGRAM_BOT_TOKEN` | Telegram 通知  | 空                                |
-| `PING_TARGETS`       | 延迟监控目标   | Google:8.8.8.8,Cloudflare:1.1.1.1 |
+| 变量                      | 说明                          | 默认值                            |
+| ------------------------- | ----------------------------- | --------------------------------- |
+| `HELIOX_MON_PASS`         | 登录密码（必填）              | 自动生成                          |
+| `HELIOX_MON_USER`         | 登录用户名                    | admin                             |
+| `HELIOX_MON_LISTEN`       | 监听地址                      | 127.0.0.1:9100                    |
+| `HELIOX_MON_DATA_DIR`     | 数据目录（SQLite）            | /var/lib/heliox-mon               |
+| `SERVER_NAME`             | 服务器标识                    | Heliox（建议设为主机名）          |
+| `HELIOX_MON_TZ`           | 时区                          | Asia/Shanghai                     |
+| `HELIOX_ENV_PATH`         | heliox 的 .env 路径（读端口） | ../heliox/.env                    |
+| `MONTHLY_LIMIT_GB`        | 月流量限额(GB)                | 1000                              |
+| `BILLING_MODE`            | 计费模式                      | bidirectional                     |
+| `RESET_DAY`               | 计费周期重置日 (1-28)         | 1 (每月1号)                       |
+| `ALERT_THRESHOLDS`        | 报警阈值百分比（逗号分隔）    | 80,90,95                          |
+| `TELEGRAM_BOT_TOKEN`      | Telegram Bot Token            | 空                                |
+| `TELEGRAM_CHAT_ID`        | Telegram 接收会话 ID          | 空                                |
+| `HELIOX_TURNSTILE_SECRET` | Cloudflare Turnstile 密钥     | 空（设置后启用人机验证）          |
+| `PING_TARGETS`            | 延迟监控目标 (`TAG:IP`)       | Google:8.8.8.8,Cloudflare:1.1.1.1 |
+| `PING_COUNT`              | 每次 ping 发包数              | 5                                 |
+| `PING_TIMEOUT_MS`         | 单次 ping 超时(ms)            | 1000                              |
+| `PING_GAP_MS`             | ping 发包间隔(ms)             | 200                               |
 
 ### 计费模式 (BILLING_MODE)
 
@@ -153,10 +176,22 @@ iptables -L HELIOX_STATS -n -v
 ### 数据持久化
 
 - 流量快照保留从昨日 00:00 起（确保昨日统计完整）
-- 日统计永久保存在 SQLite 数据库
-- 重启服务不影响历史数据
+- 流量日统计永久保存在 SQLite 数据库
+- 延迟数据：原始记录（每分钟）保留 7 天，更早的数据按 10 分钟粒度降采样并保留 90 天（保留长期趋势的同时控制体积）
+- 系统资源指标仅保留最近 1 小时（用于实时展示）
+- 重启服务不影响历史数据（计数器偏移量自动恢复，避免统计跳变）
+
+> 流量统计仅采集物理网卡，自动排除 `lo`、容器网桥（docker/br-/veth）及隧道接口（tun/wg/cloudflared/tailscale 等），避免代理流量被重复计入。
 
 ## 更新日志
+
+### v0.10.38 (2026-06-20)
+
+- 🎯 **统计准确性** - 流量采集排除 tun/wg/cloudflared 等隧道虚拟接口，修复与物理网卡重复计入导致的流量翻倍
+- 📉 **延迟历史不再丢失** - 7 天前数据由「直接删除」改为真正降采样（10 分钟桶聚合，保留 90 天）
+- 🔔 **报警去重** - 跨过多个阈值时只发送最高阈值一条预警
+- ⚡ **性能** - iptables 检测结果缓存 60s、会话定时清理、复合索引优化查询
+- 🔐 **安全** - HTTPS 下自动启用 Cookie Secure、登录请求体大小限制
 
 ### v0.10.15 (2026-01-26)
 
