@@ -288,12 +288,46 @@ func (c *Collector) aggregatePortDailyTraffic(date string) {
 	}
 }
 
+// 延迟数据保留策略
+const (
+	latencyRawRetention = 7 * 24 * time.Hour  // 原始（每分钟）数据保留 7 天
+	latencyAggRetention = 90 * 24 * time.Hour // 聚合数据保留 90 天
+	latencyAggBucketSec = 600                 // 聚合粒度：10 分钟
+)
+
 // aggregateLatencyData 延迟数据降采样
+// 将 7 天前的原始数据按 10 分钟桶聚合后写入（is_aggregated=1），再删除原始记录，
+// 避免历史数据被直接删光——既保留长期趋势，又控制数据库体积。
 func (c *Collector) aggregateLatencyData() {
-	// 删除 7 天前的原始数据，保留聚合数据
-	cutoff := time.Now().Add(-7 * 24 * time.Hour).Unix()
-	if _, err := c.db.Exec("DELETE FROM latency_records WHERE ts < ? AND is_aggregated = 0", cutoff); err != nil {
+	cutoff := time.Now().Add(-latencyRawRetention).Unix()
+
+	// 1. 按 (target, 10分钟桶) 聚合 7 天前的原始数据
+	// AVG 自动忽略 NULL 的 rtt_ms；sent/lost 求和保持丢包统计连续
+	if _, err := c.db.Exec(`
+		INSERT INTO latency_records (ts, target, rtt_ms, sent, lost, is_aggregated)
+		SELECT (ts / ?) * ?,
+		       target,
+		       AVG(rtt_ms),
+		       SUM(COALESCE(sent, 0)),
+		       SUM(COALESCE(lost, 0)),
+		       1
+		FROM latency_records
+		WHERE is_aggregated = 0 AND ts < ?
+		GROUP BY target, (ts / ?)
+	`, latencyAggBucketSec, latencyAggBucketSec, cutoff, latencyAggBucketSec); err != nil {
+		log.Printf("延迟数据降采样失败: %v", err)
+		return
+	}
+
+	// 2. 删除已聚合的原始数据
+	if _, err := c.db.Exec("DELETE FROM latency_records WHERE is_aggregated = 0 AND ts < ?", cutoff); err != nil {
 		log.Printf("清理延迟原始数据失败: %v", err)
+	}
+
+	// 3. 清理超过保留期的聚合数据
+	aggCutoff := time.Now().Add(-latencyAggRetention).Unix()
+	if _, err := c.db.Exec("DELETE FROM latency_records WHERE is_aggregated = 1 AND ts < ?", aggCutoff); err != nil {
+		log.Printf("清理过期聚合数据失败: %v", err)
 	}
 }
 
@@ -354,17 +388,21 @@ func (c *Collector) checkQuotaAndNotify(now time.Time) {
 	usedGB := int(math.Round(float64(usedBytes) / float64(1024*1024*1024)))
 	daysLeft := int(billingEnd.Sub(now).Hours() / 24)
 
+	// 只就「已跨过的最高阈值」发送一条预警，避免同时触达 80/90/95 三条消息。
+	// 各阈值的 24h 冷却由 notifier 基于 alert_records 独立维护，
+	// 因此用量逐步攀升时仍会按 90→95 的顺序依次提醒。
 	thresholds := append([]int(nil), c.cfg.AlertThresholds...)
 	sort.Ints(thresholds)
+	highest := -1
 	for _, threshold := range thresholds {
-		if threshold <= 0 {
-			continue
+		if threshold > 0 && percent >= float64(threshold) {
+			highest = threshold
 		}
-		if percent >= float64(threshold) {
-			resetDate := billingEnd.Format("2006-01-02")
-			if err := c.notifier.SendTrafficAlert(usedGB, limitGB, percent, resetDate, daysLeft, threshold); err != nil {
-				log.Printf("发送流量预警失败: %v", err)
-			}
+	}
+	if highest > 0 {
+		resetDate := billingEnd.Format("2006-01-02")
+		if err := c.notifier.SendTrafficAlert(usedGB, limitGB, percent, resetDate, daysLeft, highest); err != nil {
+			log.Printf("发送流量预警失败: %v", err)
 		}
 	}
 }

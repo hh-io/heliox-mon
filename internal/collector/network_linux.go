@@ -15,6 +15,26 @@ import (
 // 预编译正则（避免每次采集重复编译）
 var reIptablesCounter = regexp.MustCompile(`\[(\d+):(\d+)\] -A HELIOX_STATS\s+-p\s+(tcp|udp)\s+.*--(dport|sport)\s+(\d+)`)
 
+// 需要排除的虚拟/隧道接口前缀（这些接口的流量会与物理网卡重复）
+var virtualIfacePrefixes = []string{
+	"docker", "br-", "veth", "virbr", "vmnet", // 容器/虚拟机网桥
+	"tun", "tap", "wg", "cloudflared", // VPN/隧道
+	"tailscale", "zt", "gre", "sit", "ip6tnl", // 其他隧道
+}
+
+// isVirtualIface 判断是否为应排除的虚拟/隧道接口
+func isVirtualIface(iface string) bool {
+	if iface == "" || iface == "lo" {
+		return true
+	}
+	for _, p := range virtualIfacePrefixes {
+		if strings.HasPrefix(iface, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // collectRealtimeSpeed 每秒采集流量并计算实时网速（只更新内存，不写数据库）
 func (c *Collector) collectRealtimeSpeed() {
 	defer c.wg.Done()
@@ -184,8 +204,10 @@ func (c *Collector) readProcNetDev() (tx, rx uint64, err error) {
 		}
 
 		iface := strings.TrimSpace(parts[0])
-		// 跳过 lo 和 docker 网桥
-		if iface == "lo" || strings.HasPrefix(iface, "docker") || strings.HasPrefix(iface, "br-") || strings.HasPrefix(iface, "veth") {
+		// 跳过回环、容器网桥及各类隧道/虚拟接口，避免与物理网卡重复计入流量。
+		// 代理（VLESS/Snell/WireGuard 等）的实际出入流量最终都经物理网卡转发，
+		// 若同时统计 tun/wg/cloudflared 等隧道接口会导致流量翻倍，使配额统计失真。
+		if isVirtualIface(iface) {
 			continue
 		}
 

@@ -3,3 +3,5 @@
 build/
 /heliox-mon
 *.log
+
+.DS_Store

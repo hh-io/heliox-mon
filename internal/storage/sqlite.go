@@ -56,8 +56,8 @@ func migrate(db *sql.DB) error {
 			tx_bytes INTEGER NOT NULL,
 			rx_bytes INTEGER NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_traffic_snapshots_ts ON traffic_snapshots(ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_traffic_snapshots_iface ON traffic_snapshots(iface)`,
+		// 复合索引匹配查询条件 (iface = ? AND ts BETWEEN ?)，避免全表扫描
+		`CREATE INDEX IF NOT EXISTS idx_traffic_snapshots_iface_ts ON traffic_snapshots(iface, ts)`,
 
 		// 端口流量快照
 		`CREATE TABLE IF NOT EXISTS port_traffic_snapshots (
@@ -67,8 +67,7 @@ func migrate(db *sql.DB) error {
 			tx_bytes INTEGER NOT NULL,
 			rx_bytes INTEGER NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_port_traffic_ts ON port_traffic_snapshots(ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_port_traffic_port ON port_traffic_snapshots(port)`,
+		`CREATE INDEX IF NOT EXISTS idx_port_traffic_port_ts ON port_traffic_snapshots(port, ts)`,
 
 		// 流量日汇总
 		`CREATE TABLE IF NOT EXISTS traffic_daily (
@@ -98,8 +97,9 @@ func migrate(db *sql.DB) error {
 			lost INTEGER DEFAULT 0,
 			is_aggregated INTEGER DEFAULT 0
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_latency_ts ON latency_records(ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_latency_target ON latency_records(target)`,
+		// 复合索引匹配查询条件 (target = ? AND ts BETWEEN ?) 及聚合清理
+		`CREATE INDEX IF NOT EXISTS idx_latency_target_ts ON latency_records(target, ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_latency_agg_ts ON latency_records(is_aggregated, ts)`,
 
 		// 系统资源快照
 		`CREATE TABLE IF NOT EXISTS system_metrics (
@@ -134,7 +134,7 @@ func migrate(db *sql.DB) error {
 
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil {
-			return fmt.Errorf("执行迁移失败 [%s]: %w", m[:50], err)
+			return fmt.Errorf("执行迁移失败 [%s]: %w", snippet(m, 50), err)
 		}
 	}
 
@@ -142,5 +142,22 @@ func migrate(db *sql.DB) error {
 	_, _ = db.Exec("ALTER TABLE latency_records ADD COLUMN sent INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE latency_records ADD COLUMN lost INTEGER DEFAULT 0")
 
+	// 清理已被复合索引取代的旧单列索引（忽略不存在的情况）
+	for _, idx := range []string{
+		"idx_traffic_snapshots_ts", "idx_traffic_snapshots_iface",
+		"idx_port_traffic_ts", "idx_port_traffic_port",
+		"idx_latency_ts", "idx_latency_target",
+	} {
+		_, _ = db.Exec("DROP INDEX IF EXISTS " + idx)
+	}
+
 	return nil
+}
+
+// snippet 安全截断字符串用于日志（避免越界）
+func snippet(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

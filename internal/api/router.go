@@ -33,6 +33,12 @@ type Server struct {
 	server           *http.Server
 	realtimeProvider RealtimeDataProvider
 	sessions         sync.Map // token -> expireTime(int64)
+	stopCleanup      chan struct{}
+
+	// iptables 规则检测结果缓存（避免每个请求都 fork iptables）
+	iptablesMu      sync.Mutex
+	iptablesOK      bool
+	iptablesChecked time.Time
 }
 
 // RealtimeDataProvider 实时数据提供者接口
@@ -46,6 +52,7 @@ func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeData
 		cfg:              cfg,
 		db:               db,
 		realtimeProvider: realtimeProvider,
+		stopCleanup:      make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
@@ -79,14 +86,36 @@ func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeData
 // Start 启动服务器
 func (s *Server) Start() error {
 	log.Printf("HTTP 服务启动: %s", s.cfg.ListenAddr)
+	go s.cleanupSessions()
 	return s.server.ListenAndServe()
 }
 
 // Stop 停止服务器
 func (s *Server) Stop() {
+	close(s.stopCleanup)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	s.server.Shutdown(ctx)
+}
+
+// cleanupSessions 定期清理过期会话，避免长期未访问的 token 永久滞留内存
+func (s *Server) cleanupSessions() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopCleanup:
+			return
+		case <-ticker.C:
+			now := time.Now().Unix()
+			s.sessions.Range(func(key, value interface{}) bool {
+				if expire, ok := value.(int64); ok && now > expire {
+					s.sessions.Delete(key)
+				}
+				return true
+			})
+		}
+	}
 }
 
 const (
@@ -162,6 +191,9 @@ func (s *Server) handleLoginAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 限制请求体大小，防止恶意超大 body
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+
 	var req struct {
 		Username       string `json:"username"`
 		Password       string `json:"password"`
@@ -190,16 +222,29 @@ func (s *Server) handleLoginAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := s.generateToken()
+	if token == "" {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     authCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   isHTTPS(r),
 		MaxAge:   int(authSessionTTL.Seconds()),
 		SameSite: http.SameSiteLaxMode,
 	})
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// isHTTPS 判断请求是否经由 HTTPS（兼容 Cloudflare Tunnel/反向代理的 X-Forwarded-Proto）
+func isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // checkCredentials 使用常量时间比较验证用户名和密码
@@ -810,7 +855,7 @@ func (s *Server) handlePortTraffic(w http.ResponseWriter, r *http.Request) {
 	for _, p := range ports {
 		portNums = append(portNums, p.Port)
 	}
-	iptablesOK := s.checkIptablesRules(portNums)
+	iptablesOK := s.cachedIptablesOK(portNums)
 
 	result := map[string]interface{}{
 		"ports":       []map[string]interface{}{},
@@ -924,6 +969,19 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Write(data)
+}
+
+// cachedIptablesOK 返回带缓存的 iptables 规则检测结果（TTL 60 秒），
+// 规则状态极少变化，避免每个请求都 fork iptables 进程
+func (s *Server) cachedIptablesOK(ports []int) bool {
+	s.iptablesMu.Lock()
+	defer s.iptablesMu.Unlock()
+	if time.Since(s.iptablesChecked) < 60*time.Second {
+		return s.iptablesOK
+	}
+	s.iptablesOK = s.checkIptablesRules(ports)
+	s.iptablesChecked = time.Now()
+	return s.iptablesOK
 }
 
 // checkIptablesRules 检测 iptables 规则是否存在
