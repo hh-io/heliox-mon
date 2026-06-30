@@ -11,7 +11,8 @@ make dev      # 本地开发构建 -> build/heliox-mon（当前平台）
 make build    # 生产构建 Linux/amd64（CGO_ENABLED=0）
 make release  # 同时构建 Linux amd64 + arm64
 make test     # go test ./...
-make fmt      # go fmt + goimports
+make fmt      # go fmt + goimports（goimports 需先安装）
+make lint     # golangci-lint run
 
 # 本地运行（必须设置密码；Mac 上自动产生 mock 数据）
 HELIOX_MON_PASS=test go run ./cmd/heliox-mon
@@ -19,12 +20,20 @@ HELIOX_MON_PASS=test go run ./cmd/heliox-mon
 
 部署/运维（install/start/stop/update 等）由 heliox 仓库的 `deploy.sh monitor <cmd>` 驱动，不在本仓库内。
 
+## 测试与质量门禁
+
+- **CI**（`.github/workflows/ci.yml`）在 push/PR 时跑：`golangci-lint` + `go vet` + `go test` + 三平台构建（linux amd64/arm64 + darwin，保护 mock 路径）+ `govulncheck`。门禁在 **Linux** 上运行。
+- **本机跑 lint 必须加 `GOOS=linux`**：`GOOS=linux golangci-lint run ./...`。否则 darwin 上会把 `collector.go` 里只被 `_linux.go` 使用的字段误报为 `unused`（跨平台假阳性）。
+- **lint 配置** `.golangci.yml` 启用 errcheck/staticcheck/govet/bodyclose/errorlint 等——**不要静默吞掉错误**，否则 errcheck 会让 CI 变红。
+- 单测分布：`config`（计费周期/配置解析）、`storage`（迁移/查询）可在 Mac 跑；`*_linux_test.go`（`isVirtualIface`、`latency`）仅 Linux 构建，本机 `go test` 不执行,靠 CI 覆盖。
+
 ## 架构与关键约定
 
 - **跨平台靠 build tag 分离采集逻辑**：`internal/collector/*_linux.go` 是真实采集（读 `/proc`、`iptables`），`collector_darwin.go` 是 Mac 本地开发用的 mock 实现。**修改采集逻辑时通常要同时改 Linux 与 Darwin 两份**，否则 Mac 上跑的是另一套代码。
 - **改完务必跨平台编译验证**：本机多为 Darwin，Linux-only 代码不会被本机 `go build` 检查到。提交前跑 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...`。
-- **测试文件 `latency_linux_test.go` 仅在 Linux 构建**（文件名带 `_linux`），Mac 上 `go test` 不会执行它。
-- **前端通过 `go:embed` 内嵌**（`web/embed.go`）：改动 `web/*.{html,js,css,svg}` 后必须重新构建二进制才生效。
+- **带 `_linux` 后缀的测试仅在 Linux 构建**（如 `latency_linux_test.go`、`network_linux_test.go`），Mac 上 `go test` 不会执行它们，依赖 CI 覆盖。
+- **前端通过 `go:embed` 内嵌**（`web/embed.go`，含 `vendor/` 目录）：改动 `web/*.{html,js,css,svg}` 后必须重新构建二进制才生效。**图表库（Chart.js / annotation / ECharts）已本地化到 `web/vendor/`，不走 CDN**——升级版本需替换 `vendor/` 下文件并重建。
+- **HTTP 响应统一用 `writeJSON` 辅助函数**（`internal/api/router.go`）输出 JSON；写出失败记日志而非静默忽略。
 - **SQLite 用纯 Go 驱动 `modernc.org/sqlite`（无需 CGO）**，WAL 模式；表结构与迁移集中在 `internal/storage/sqlite.go` 的 `migrate()`，启动时执行。
 - **配置全部来自环境变量**（`internal/config/config.go`），无配置文件；唯一例外是读取 heliox 的 `.env` 以获取 `SNELL_PORT`/`VLESS_PORT`。`HELIOX_MON_PASS` 必填，缺失则启动失败。
 - **认证**：Web 用随机 token + HttpOnly Cookie 会话，`/api/*` 同时兼容 Basic Auth；可选 Cloudflare Turnstile。
@@ -39,4 +48,6 @@ HELIOX_MON_PASS=test go run ./cmd/heliox-mon
 ## 代码风格
 
 - 注释与日志信息使用中文，保持与现有代码一致。
-- 遵循 gofmt；提交前确保 `make test` 与 `go vet ./...` 通过。
+- 遵循 gofmt；提交前确保 `make test`、`go vet ./...` 与 `GOOS=linux golangci-lint run ./...` 通过。
+- 显式处理错误，不要静默吞掉返回的 `error`（CI 的 errcheck 会拦截）。
+- 版本变更记入 `CHANGELOG.md`（Keep a Changelog 格式）。
