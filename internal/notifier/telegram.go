@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -32,7 +33,9 @@ func (n *Notifier) SendTrafficAlert(usedGB, limitGB int, percent float64, resetD
 	// 检查冷却期（同级别 24 小时内不重复发送）
 	cutoff := time.Now().Add(-24 * time.Hour).Unix()
 	var count int
-	n.db.QueryRow("SELECT COUNT(*) FROM alert_records WHERE threshold = ? AND ts > ?", threshold, cutoff).Scan(&count)
+	if err := n.db.QueryRow("SELECT COUNT(*) FROM alert_records WHERE threshold = ? AND ts > ?", threshold, cutoff).Scan(&count); err != nil {
+		log.Printf("查询报警冷却记录失败: %v", err)
+	}
 	if count > 0 {
 		return nil // 冷却期内
 	}
@@ -57,8 +60,10 @@ func (n *Notifier) SendTrafficAlert(usedGB, limitGB int, percent float64, resetD
 	}
 
 	// 记录报警
-	n.db.Exec("INSERT INTO alert_records (ts, threshold, message) VALUES (?, ?, ?)",
-		time.Now().Unix(), threshold, msg)
+	if _, err := n.db.Exec("INSERT INTO alert_records (ts, threshold, message) VALUES (?, ?, ?)",
+		time.Now().Unix(), threshold, msg); err != nil {
+		log.Printf("记录报警发送历史失败: %v", err)
+	}
 
 	return nil
 }

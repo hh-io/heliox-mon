@@ -363,7 +363,9 @@ func (c *Collector) checkQuotaAndNotify(now time.Time) {
 		FROM traffic_daily
 		WHERE date >= ? AND iface = 'total'
 	`, billingStart.Format("2006-01-02"))
-	row.Scan(&tx, &rx)
+	if err := row.Scan(&tx, &rx); err != nil {
+		log.Printf("查询计费周期流量失败: %v", err)
+	}
 
 	var usedBytes int64
 	switch c.cfg.BillingMode {

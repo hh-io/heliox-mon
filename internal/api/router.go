@@ -95,7 +95,18 @@ func (s *Server) Stop() {
 	close(s.stopCleanup)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	s.server.Shutdown(ctx)
+	if err := s.server.Shutdown(ctx); err != nil {
+		log.Printf("HTTP 服务关闭异常: %v", err)
+	}
+}
+
+// writeJSON 写出 JSON 响应；编码失败仅记录日志
+// （响应体已开始写出，无法再修改状态码）
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("写出 JSON 响应失败: %v", err)
+	}
 }
 
 // cleanupSessions 定期清理过期会话，避免长期未访问的 token 永久滞留内存
@@ -181,7 +192,9 @@ func (s *Server) handleLoginView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		log.Printf("写出登录页失败: %v", err)
+	}
 }
 
 // handleLoginAPI 登录接口
@@ -414,8 +427,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats["reset_day"] = s.cfg.ResetDay
 	stats["alert_thresholds"] = s.cfg.AlertThresholds
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	writeJSON(w, stats)
 }
 
 // handleSystem 系统资源
@@ -449,8 +461,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"load_15":     load15,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	writeJSON(w, data)
 }
 
 // handleTrafficDaily 每日流量
@@ -494,7 +505,10 @@ func (s *Server) handleTrafficDaily(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var date string
 		var tx, rx int64
-		rows.Scan(&date, &tx, &rx)
+		if err := rows.Scan(&date, &tx, &rx); err != nil {
+			log.Printf("扫描每日流量行失败: %v", err)
+			continue
+		}
 		data = append(data, map[string]interface{}{
 			"date": date,
 			"tx":   tx,
@@ -502,8 +516,7 @@ func (s *Server) handleTrafficDaily(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	writeJSON(w, data)
 }
 
 // handleTrafficMonthly 月度汇总（返回近 6 个月，包含端口数据）
@@ -538,7 +551,10 @@ func (s *Server) handleTrafficMonthly(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var month string
 			var tx, rx int64
-			rows.Scan(&month, &tx, &rx)
+			if err := rows.Scan(&month, &tx, &rx); err != nil {
+				log.Printf("扫描月度流量行失败: %v", err)
+				continue
+			}
 			totalData[month] = totalTraffic{tx, rx}
 		}
 	}
@@ -559,7 +575,10 @@ func (s *Server) handleTrafficMonthly(w http.ResponseWriter, r *http.Request) {
 			var month string
 			var port int
 			var tx, rx int64
-			rows2.Scan(&month, &port, &tx, &rx)
+			if err := rows2.Scan(&month, &port, &tx, &rx); err != nil {
+				log.Printf("扫描端口月度流量行失败: %v", err)
+				continue
+			}
 			if portData[month] == nil {
 				portData[month] = make(map[int]portTraffic)
 			}
@@ -593,8 +612,7 @@ func (s *Server) handleTrafficMonthly(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	writeJSON(w, data)
 }
 
 // handleTrafficRealtime SSE 实时推送
@@ -725,7 +743,10 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 			var rtt, minRtt, jitter sql.NullFloat64
 			var sent sql.NullInt64
 			var lost sql.NullInt64
-			rows.Scan(&ts, &rtt, &minRtt, &jitter, &sent, &lost)
+			if err := rows.Scan(&ts, &rtt, &minRtt, &jitter, &sent, &lost); err != nil {
+				log.Printf("扫描延迟数据行失败: %v", err)
+				continue
+			}
 			sentVal := sent.Int64
 			lostVal := lost.Int64
 			if !sent.Valid {
@@ -813,8 +834,7 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 		result["targets"] = append(result["targets"].([]map[string]interface{}), targetData)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	writeJSON(w, result)
 }
 
 func chooseLatencyGranularity(duration time.Duration) int {
@@ -900,7 +920,9 @@ func (s *Server) handlePortTraffic(w http.ResponseWriter, r *http.Request) {
 			WHERE port = ? AND ts >= ? AND ts <= ?
 		`, p.Port, todayStart.Unix(), todayEnd.Unix())
 		var todayTx, todayRx int64
-		row.Scan(&todayTx, &todayRx)
+		if err := row.Scan(&todayTx, &todayRx); err != nil && err != sql.ErrNoRows {
+			log.Printf("扫描端口今日流量失败: %v", err)
+		}
 		portData["today"] = map[string]int64{"tx": todayTx, "rx": todayRx, "total": todayTx + todayRx}
 
 		// 昨日流量
@@ -910,7 +932,9 @@ func (s *Server) handlePortTraffic(w http.ResponseWriter, r *http.Request) {
 			WHERE port = ? AND date = ?
 		`, p.Port, yesterday)
 		var yesterdayTx, yesterdayRx int64
-		row.Scan(&yesterdayTx, &yesterdayRx)
+		if err := row.Scan(&yesterdayTx, &yesterdayRx); err != nil && err != sql.ErrNoRows {
+			log.Printf("扫描端口昨日流量失败: %v", err)
+		}
 		portData["yesterday"] = map[string]int64{"tx": yesterdayTx, "rx": yesterdayRx, "total": yesterdayTx + yesterdayRx}
 
 		// 本月流量（从日表查询，排除今日避免重复）
@@ -920,7 +944,9 @@ func (s *Server) handlePortTraffic(w http.ResponseWriter, r *http.Request) {
 			WHERE port = ? AND date >= ? AND date < ?
 		`, p.Port, billingStart.Format("2006-01-02"), today)
 		var monthTx, monthRx int64
-		row.Scan(&monthTx, &monthRx)
+		if err := row.Scan(&monthTx, &monthRx); err != nil && err != sql.ErrNoRows {
+			log.Printf("扫描端口本月流量失败: %v", err)
+		}
 		// 加上今日（从快照计算的实时数据）
 		monthTx += todayTx
 		monthRx += todayRx
@@ -933,14 +959,15 @@ func (s *Server) handlePortTraffic(w http.ResponseWriter, r *http.Request) {
 			WHERE port = ? AND date >= ? AND date <= ?
 		`, p.Port, lastMonthStart.Format("2006-01-02"), lastMonthEnd.Format("2006-01-02"))
 		var lastMonthTx, lastMonthRx int64
-		row.Scan(&lastMonthTx, &lastMonthRx)
+		if err := row.Scan(&lastMonthTx, &lastMonthRx); err != nil && err != sql.ErrNoRows {
+			log.Printf("扫描端口上月流量失败: %v", err)
+		}
 		portData["last_month"] = map[string]int64{"tx": lastMonthTx, "rx": lastMonthRx, "total": lastMonthTx + lastMonthRx}
 
 		result["ports"] = append(result["ports"].([]map[string]interface{}), portData)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	writeJSON(w, result)
 }
 
 // handleConfig 配置管理
@@ -955,8 +982,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"ping_targets":     s.cfg.PingTargets,
 			"telegram_enabled": s.cfg.TelegramBotToken != "",
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(cfg)
+		writeJSON(w, cfg)
 		return
 	}
 
@@ -992,7 +1018,9 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		log.Printf("写出静态资源 %s 失败: %v", path, err)
+	}
 }
 
 // cachedIptablesOK 返回带缓存的 iptables 规则检测结果（TTL 60 秒），
