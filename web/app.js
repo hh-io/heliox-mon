@@ -10,12 +10,7 @@ function formatBytes(bytes) {
 }
 
 function formatSpeed(bytesPerSec) {
-  if (bytesPerSec < 1024) return bytesPerSec.toFixed(1) + " B/s";
-  if (bytesPerSec < 1024 * 1024)
-    return (bytesPerSec / 1024).toFixed(1) + " KB/s";
-  if (bytesPerSec < 1024 * 1024 * 1024)
-    return (bytesPerSec / 1024 / 1024).toFixed(2) + " MB/s";
-  return (bytesPerSec / 1024 / 1024 / 1024).toFixed(2) + " GB/s";
+  return formatSpeedParts(bytesPerSec).join(" ");
 }
 
 function formatSpeedParts(bytesPerSec) {
@@ -31,6 +26,21 @@ function formatTimeLabel(date) {
   const m = String(date.getMinutes()).padStart(2, "0");
   const s = String(date.getSeconds()).padStart(2, "0");
   return `${m}:${s}`;
+}
+
+// 转义用户/配置可控字符串，避免拼接进 innerHTML 时产生注入
+function escapeHtml(value) {
+  return String(value).replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c],
+  );
 }
 
 function hexToRgba(hex, alpha) {
@@ -282,11 +292,11 @@ function renderPortList(containerId, ports, period) {
   container.innerHTML = ports
     .map((p) => {
       const d = p[period];
-      const cssClass = p.name.toLowerCase();
+      const name = escapeHtml(p.name.toLowerCase());
       // 使用 Grid 布局：第一行名称，第二行三组数据
       return `
-      <div class="port-item ${cssClass}">
-        <span class="port-name">${p.name.toLowerCase()}</span>
+      <div class="port-item ${name}">
+        <span class="port-name">${name}</span>
         <div class="port-stats">
           <div class="stats-group-up">
             <span class="stat-up">↑ ${formatBytes(d.tx)}</span>
@@ -315,7 +325,7 @@ function renderPortMonthGrid(containerId, ports) {
       const gb = (d.total / 1024 / 1024 / 1024).toFixed(2);
       return `
       <div class="month-item">
-        <div class="port-name">${p.name.toLowerCase()}</div>
+        <div class="port-name">${escapeHtml(p.name.toLowerCase())}</div>
         <div class="port-value">${gb} GB</div>
       </div>
     `;
@@ -651,7 +661,11 @@ function applyTheme(theme) {
 
 function initThemeToggle() {
   const stored = localStorage.getItem(themeStorageKey);
-  const preferred = stored || "dark";
+  // 未手动选择过时跟随系统偏好，默认深色
+  const prefersLight =
+    window.matchMedia &&
+    window.matchMedia("(prefers-color-scheme: light)").matches;
+  const preferred = stored || (prefersLight ? "light" : "dark");
   applyTheme(preferred);
 
   const toggleBtn = document.getElementById("theme-toggle");
@@ -932,7 +946,7 @@ function renderLatencyChart() {
                 : p.seriesName === "丢包率"
                   ? `${Number(value).toFixed(1)}%`
                   : `${Number(value).toFixed(1)} ms`;
-            return `<span style=\"display:inline-block;margin-right:6px;width:8px;height:8px;border-radius:50%;background:${p.color}\"></span>${p.seriesName}: ${text}`;
+            return `<span style=\"display:inline-block;margin-right:6px;width:8px;height:8px;border-radius:50%;background:${p.color}\"></span>${escapeHtml(p.seriesName)}: ${text}`;
           })
           .join("<br/>");
         return `${time}<br/>${rows}`;
@@ -1039,7 +1053,7 @@ function renderLatencyStats() {
         <div class="latency-target-card">
           <div class="latency-target-header">
             <span class="latency-target-dot" style="background:${color}"></span>
-            <span>${t.tag}</span>
+            <span>${escapeHtml(t.tag)}</span>
           </div>
           <div class="latency-target-values">
             <span>均值 <strong>${formatNumber(stats.avg)}</strong>ms</span>
@@ -2062,9 +2076,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const elapsed = now - lastActiveTime;
       // 如果离开超过 30 秒，立即刷新所有数据
       if (elapsed > 30000) {
-        console.log(
-          `页面恢复，已休眠 ${Math.round(elapsed / 1000)} 秒，刷新数据...`,
-        );
         fetchStats();
         fetchSystem();
         fetchMonthlyTrend();

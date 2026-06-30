@@ -205,6 +205,35 @@
       .hero-login p {
         letter-spacing: 0.5px;
       }
+
+      /* 浅色主题（跟随主面板存储的主题 / 系统偏好） */
+      body.theme-light {
+        background:
+          radial-gradient(
+            circle at 10% 20%,
+            rgba(10, 132, 255, 0.1) 0%,
+            transparent 40%
+          ),
+          radial-gradient(
+            circle at 90% 80%,
+            rgba(191, 90, 242, 0.12) 0%,
+            transparent 40%
+          ),
+          var(--bg);
+        background-size: 150% 150%;
+      }
+      body.theme-light .login-wrapper {
+        background: rgba(255, 255, 255, 0.65);
+        border-color: rgba(0, 0, 0, 0.08);
+        box-shadow: 0 30px 60px rgba(20, 20, 30, 0.15);
+      }
+      body.theme-light .form-input {
+        background: rgba(0, 0, 0, 0.04);
+        border-color: rgba(0, 0, 0, 0.1);
+      }
+      body.theme-light .hero-login h1 {
+        background-image: linear-gradient(135deg, #1c1c1e 0%, #4b4b52 100%);
+      }
     </style>
     <script
       src="https://challenges.cloudflare.com/turnstile/v0/api.js"
@@ -213,6 +242,18 @@
     ></script>
   </head>
   <body>
+    <script>
+      // 在首帧前应用主题，避免闪烁：优先用主面板存储的主题，否则跟随系统
+      (function () {
+        const stored = localStorage.getItem("heliox-theme");
+        const isLight = stored
+          ? stored === "light"
+          : window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: light)").matches;
+        if (isLight) document.body.classList.add("theme-light");
+        window.__loginThemeLight = isLight;
+      })();
+    </script>
     <!-- Background Decor (Orbs) -->
     <div
       style="
@@ -307,7 +348,7 @@
         <div
           class="cf-turnstile"
           data-sitekey="0x4AAAAAACOhRkua9joDOJiB"
-          data-theme="dark"
+          data-theme="auto"
           style="margin: 0 auto"
         ></div>
         <button type="submit" class="btn-login">登录</button>
@@ -316,6 +357,15 @@
     </div>
 
     <script>
+      // 让 Turnstile 主题与页面主题一致（在 api.js[defer] 渲染前设置）
+      const tsEl = document.querySelector(".cf-turnstile");
+      if (tsEl) {
+        tsEl.setAttribute(
+          "data-theme",
+          window.__loginThemeLight ? "light" : "dark",
+        );
+      }
+
       document
         .getElementById("login-form")
         .addEventListener("submit", async (e) => {
