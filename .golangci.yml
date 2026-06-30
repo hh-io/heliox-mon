@@ -1,0 +1,26 @@
+# golangci-lint 配置：高信号、低噪音，作为 CI 质量门禁
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck # 未处理的错误（符合"不要静默吞掉异常"约定）
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - gofmt
+    - goimports
+    - bodyclose # HTTP 响应体未关闭
+    - errorlint # 错误包装/比较使用规范
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # 测试文件中忽略部分检查，降低噪音
+    - path: _test\.go
+      linters:
+        - errcheck
+        - bodyclose
