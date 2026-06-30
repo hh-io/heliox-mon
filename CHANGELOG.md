@@ -5,17 +5,22 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-01
+
 ### 新增
 
 - 工程化质量门禁：新增 GitHub Actions CI（lint / vet / test / 多平台构建 / govulncheck）。
 - `golangci-lint` 配置（errcheck、staticcheck、govet、bodyclose、errorlint 等）。
 - 核心逻辑单元测试：计费周期计算、配置与端口解析、虚拟网卡过滤、SQLite 迁移与流量查询。
 - 新增 `LICENSE`（MIT）与本 `CHANGELOG`。
+- `http.Server` 读取超时（`ReadHeaderTimeout` / `ReadTimeout` / `IdleTimeout`），
+  防御 Slowloris 慢速连接；SSE 实时推送不设 `WriteTimeout` 以免长连接被掐断。
 
 ### 修复
 
 - 显式处理此前被忽略的错误返回值（`rows.Scan` / `json.Encode` / `w.Write` /
   `db.Exec` / `server.Shutdown` 等），消除静默吞错。
+- `make fmt` 在未安装 `goimports` 时报错：改用 `go run` 临时拉取；补全 Makefile `.PHONY` 目标。
 
 ### 变更
 
@@ -47,7 +52,8 @@
 
 - 提升延迟与丢包统计准确性，新增最小 RTT 与抖动（mdev）指标。
 
-[Unreleased]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.43...HEAD
+[Unreleased]: https://github.com/Theo-oh/heliox-mon/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.43...v0.11.0
 [0.10.43]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.42...v0.10.43
 [0.10.42]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.41...v0.10.42
 [0.10.41]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.40...v0.10.41

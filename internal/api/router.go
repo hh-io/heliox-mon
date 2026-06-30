@@ -78,6 +78,11 @@ func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeData
 	s.server = &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: mux,
+		// 设置读取超时防止 Slowloris 慢速连接耗尽资源。
+		// 不设 WriteTimeout：/api/traffic/realtime 是 SSE 长连接，全局写超时会把它掐断。
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	return s

@@ -1,4 +1,4 @@
-.PHONY: build clean dev deps
+.PHONY: all build clean dev deps test fmt lint release
 
 # 变量
 BINARY_NAME=heliox-mon
@@ -44,10 +44,10 @@ clean:
 test:
 	go test -v ./...
 
-# 格式化代码
+# 格式化代码（goimports 未安装时用 go run 临时拉取，避免 make fmt 报错）
 fmt:
 	go fmt ./...
-	goimports -w .
+	go run golang.org/x/tools/cmd/goimports@latest -w .
 
 # 静态检查
 lint:
