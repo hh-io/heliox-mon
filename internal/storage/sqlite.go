@@ -24,10 +24,18 @@ func NewDB(dataDir string) (*DB, error) {
 
 	dbPath := filepath.Join(dataDir, "heliox-mon.db")
 	// WAL 模式 + 优化参数
+	// 注意：modernc.org/sqlite 只识别 _pragma=xxx(val) 形式，
+	// mattn 风格的 _journal_mode/_busy_timeout 等参数会被静默忽略，
+	// 导致 WAL 未开启、busy_timeout=0，并发写立即 SQLITE_BUSY。
 	// - busy_timeout=10000: 锁等待 10 秒
 	// - cache_size=-64000: 64MB 内存缓存
 	// - temp_store=2: 临时表存内存
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache_size=-64000&temp_store=2")
+	dsn := dbPath + "?_pragma=busy_timeout(10000)" +
+		"&_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(NORMAL)" +
+		"&_pragma=cache_size(-64000)" +
+		"&_pragma=temp_store(2)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)
 	}
