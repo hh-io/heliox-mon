@@ -93,6 +93,8 @@ func migrate(db *sql.DB) error {
 			ts INTEGER NOT NULL,
 			target TEXT NOT NULL,
 			rtt_ms REAL,
+			min_rtt REAL,
+			mdev REAL,
 			sent INTEGER DEFAULT 0,
 			lost INTEGER DEFAULT 0,
 			is_aggregated INTEGER DEFAULT 0
@@ -141,6 +143,9 @@ func migrate(db *sql.DB) error {
 	// 兼容旧版本（增加丢包统计字段）
 	_, _ = db.Exec("ALTER TABLE latency_records ADD COLUMN sent INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE latency_records ADD COLUMN lost INTEGER DEFAULT 0")
+	// 兼容旧版本（增加最小 RTT 与抖动字段，用于更准确的延迟参考）
+	_, _ = db.Exec("ALTER TABLE latency_records ADD COLUMN min_rtt REAL")
+	_, _ = db.Exec("ALTER TABLE latency_records ADD COLUMN mdev REAL")
 
 	// 清理已被复合索引取代的旧单列索引（忽略不存在的情况）
 	for _, idx := range []string{

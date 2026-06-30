@@ -118,12 +118,18 @@ func (c *Collector) doCollectLatency() {
 	now := time.Now().Unix()
 
 	for _, target := range c.cfg.PingTargets {
-		// 模拟 10ms - 300ms 随机延迟
-		rtt := 10.0 + rand.Float64()*290.0
+		// 模拟 10ms - 300ms 随机延迟，并据此派生最小 RTT 与抖动
+		avg := 10.0 + rand.Float64()*290.0
+		mdev := rand.Float64() * 5.0
+		min := avg - mdev
+		if min < 0 {
+			min = 0
+		}
 
 		_, err := c.db.Exec(
-			"INSERT INTO latency_records (ts, target, rtt_ms, sent, lost, is_aggregated) VALUES (?, ?, ?, ?, ?, 0)",
-			now, target.IP, rtt, 5, 0,
+			`INSERT INTO latency_records (ts, target, rtt_ms, min_rtt, mdev, sent, lost, is_aggregated)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+			now, target.IP, avg, min, mdev, 5, 0,
 		)
 		if err != nil {
 			log.Printf("[Mock] 保存延迟数据失败: %v", err)

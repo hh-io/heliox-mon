@@ -1218,8 +1218,12 @@ function computeTargetStats(points, range) {
   let lost = 0;
 
   let validRtts = [];
-  let jitterSum = 0;
-  let jitterCount = 0;
+  // mdev：ping 实测抖动（单次探测内标准差），更标准且经聚合仍有效，优先使用
+  let mdevSum = 0;
+  let mdevCount = 0;
+  // 相邻采样差：仅在缺少 mdev 的旧数据时回退使用
+  let deltaSum = 0;
+  let deltaCount = 0;
   let prevRtt = null;
 
   const start = range?.start ?? null;
@@ -1234,13 +1238,20 @@ function computeTargetStats(points, range) {
       count += 1;
       validRtts.push(p.rtt_ms);
 
-      if (p.rtt_ms < min) min = p.rtt_ms;
+      // min 优先用服务端真实最小 RTT，回退到本点平均值
+      const minCandidate =
+        p.min_rtt !== null && p.min_rtt !== undefined ? p.min_rtt : p.rtt_ms;
+      if (minCandidate < min) min = minCandidate;
       if (p.rtt_ms > max) max = p.rtt_ms;
 
-      // Jitter calculation
+      // 抖动：优先累加服务端 mdev
+      if (p.jitter !== null && p.jitter !== undefined) {
+        mdevSum += p.jitter;
+        mdevCount += 1;
+      }
       if (prevRtt !== null) {
-        jitterSum += Math.abs(p.rtt_ms - prevRtt);
-        jitterCount += 1;
+        deltaSum += Math.abs(p.rtt_ms - prevRtt);
+        deltaCount += 1;
       }
       prevRtt = p.rtt_ms;
     } else {
@@ -1260,10 +1271,16 @@ function computeTargetStats(points, range) {
     p95 = validRtts[idx];
   }
 
+  const jitter = mdevCount
+    ? mdevSum / mdevCount
+    : deltaCount
+      ? deltaSum / deltaCount
+      : null;
+
   return {
     avg: count ? sum / count : null,
     p95: p95,
-    jitter: jitterCount ? jitterSum / jitterCount : null,
+    jitter: jitter,
     min: min === Infinity ? null : min,
     max: max === -Infinity ? null : max,
     count,

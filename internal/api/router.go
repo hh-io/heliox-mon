@@ -699,6 +699,8 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 		rows, err := s.db.Query(`
 			SELECT (ts / ?) * ? as bucket_ts,
 			       AVG(rtt_ms) as avg_rtt,
+			       MIN(min_rtt) as min_rtt,
+			       AVG(mdev) as jitter,
 			       SUM(COALESCE(sent, 0)) as sent,
 			       SUM(COALESCE(lost, 0)) as lost
 			FROM latency_records
@@ -711,17 +713,19 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var points []map[string]interface{}
-		var sum, min, max float64
+		var sum, max float64
+		var minRttOverall float64 = 999999
+		var jitterSum float64
+		var jitterCount int
 		var count int
-		min = 999999
 		var totalSent, totalLost int64
 
 		for rows.Next() {
 			var ts int64
-			var rtt sql.NullFloat64
+			var rtt, minRtt, jitter sql.NullFloat64
 			var sent sql.NullInt64
 			var lost sql.NullInt64
-			rows.Scan(&ts, &rtt, &sent, &lost)
+			rows.Scan(&ts, &rtt, &minRtt, &jitter, &sent, &lost)
 			sentVal := sent.Int64
 			lostVal := lost.Int64
 			if !sent.Valid {
@@ -742,22 +746,37 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 				rttVal = rtt.Float64
 				sum += rtt.Float64
 				count++
-				if rtt.Float64 < min {
-					min = rtt.Float64
-				}
 				if rtt.Float64 > max {
 					max = rtt.Float64
 				}
-			} else {
-				rttVal = nil
+			}
+
+			// min 取真实最小 RTT；旧数据无 min_rtt 时退化用平均值兜底
+			var minVal interface{}
+			if minRtt.Valid {
+				minVal = minRtt.Float64
+				if minRtt.Float64 < minRttOverall {
+					minRttOverall = minRtt.Float64
+				}
+			} else if rtt.Valid && rtt.Float64 < minRttOverall {
+				minRttOverall = rtt.Float64
+			}
+
+			var jitterVal interface{}
+			if jitter.Valid {
+				jitterVal = jitter.Float64
+				jitterSum += jitter.Float64
+				jitterCount++
 			}
 
 			points = append(points, map[string]interface{}{
-				"ts":     ts,
-				"rtt_ms": rttVal,
-				"loss":   lossRate,
-				"sent":   sentVal,
-				"lost":   lostVal,
+				"ts":      ts,
+				"rtt_ms":  rttVal,
+				"min_rtt": minVal,
+				"jitter":  jitterVal,
+				"loss":    lossRate,
+				"sent":    sentVal,
+				"lost":    lostVal,
 			})
 		}
 		rows.Close()
@@ -766,8 +785,12 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 		if count > 0 {
 			avg = sum / float64(count)
 		}
-		if min == 999999 {
-			min = 0
+		if minRttOverall == 999999 {
+			minRttOverall = 0
+		}
+		avgJitter := 0.0
+		if jitterCount > 0 {
+			avgJitter = jitterSum / float64(jitterCount)
 		}
 		lossRate := 0.0
 		if totalSent > 0 {
@@ -779,11 +802,12 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 			"ip":     pt.IP,
 			"points": points,
 			"stats": map[string]interface{}{
-				"avg":   avg,
-				"min":   min,
-				"max":   max,
-				"count": count,
-				"loss":  lossRate,
+				"avg":    avg,
+				"min":    minRttOverall,
+				"max":    max,
+				"jitter": avgJitter,
+				"count":  count,
+				"loss":   lossRate,
 			},
 		}
 		result["targets"] = append(result["targets"].([]map[string]interface{}), targetData)

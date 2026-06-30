@@ -302,12 +302,15 @@ func (c *Collector) aggregateLatencyData() {
 	cutoff := time.Now().Add(-latencyRawRetention).Unix()
 
 	// 1. 按 (target, 10分钟桶) 聚合 7 天前的原始数据
-	// AVG 自动忽略 NULL 的 rtt_ms；sent/lost 求和保持丢包统计连续
+	// AVG/MIN 自动忽略 NULL；min_rtt 取桶内真实最小，mdev 取均值近似抖动，
+	// sent/lost 求和保持丢包统计连续
 	if _, err := c.db.Exec(`
-		INSERT INTO latency_records (ts, target, rtt_ms, sent, lost, is_aggregated)
+		INSERT INTO latency_records (ts, target, rtt_ms, min_rtt, mdev, sent, lost, is_aggregated)
 		SELECT (ts / ?) * ?,
 		       target,
 		       AVG(rtt_ms),
+		       MIN(min_rtt),
+		       AVG(mdev),
 		       SUM(COALESCE(sent, 0)),
 		       SUM(COALESCE(lost, 0)),
 		       1
