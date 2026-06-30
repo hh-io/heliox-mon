@@ -1,5 +1,8 @@
 # Heliox Monitor
 
+[![CI](https://github.com/Theo-oh/heliox-mon/actions/workflows/ci.yml/badge.svg)](https://github.com/Theo-oh/heliox-mon/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 轻量级服务器监控系统，专为 [Heliox](https://github.com/Theo-oh/heliox) 代理服务设计。
 
 ## 特性
