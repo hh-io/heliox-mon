@@ -357,13 +357,6 @@
               errorMsg.classList.add("show");
               btn.disabled = false;
               btn.style.opacity = "1";
-
-              // 震动动画
-              const wrapper = document.querySelector(".login-wrapper");
-              wrapper.style.animation = "shake 0.4s ease-in-out";
-              setTimeout(() => {
-                wrapper.style.animation = "";
-              }, 400);
             }
           } catch (err) {
             errorMsg.textContent = "登录请求失败";

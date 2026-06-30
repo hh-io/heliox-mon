@@ -218,10 +218,8 @@ body.theme-light .section-title {
   font-weight: 600;
 }
 
-/* Stats/Lists inside Cards (User Rows) */
-.user-row,
-.port-item,
-.speed-item {
+/* Stats/Lists inside Cards (Port Rows) */
+.port-item {
   background: var(--item-bg);
   border-radius: var(--radius-sm);
   padding: 14px 16px;
@@ -233,7 +231,6 @@ body.theme-light .section-title {
   gap: 10px;
 }
 
-.user-row:last-child,
 .port-item:last-child {
   margin-bottom: 0;
 }
@@ -242,8 +239,7 @@ body.theme-light .section-title {
   margin-top: 12px;
 }
 
-.port-name,
-.user-name {
+.port-name {
   font-size: 14px;
   color: var(--muted);
   font-weight: 500;
@@ -251,8 +247,7 @@ body.theme-light .section-title {
   padding-bottom: 4px;
 }
 
-.port-stats,
-.user-stats {
+.port-stats {
   display: grid;
   grid-template-columns: 1.2fr 1.2fr 1.5fr;
   width: 100%;
@@ -392,36 +387,6 @@ body.theme-light .section-title {
   color: var(--text);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
-}
-
-/* Speed Grid (Realtime) */
-.speed-cards {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
-}
-
-.speed-card-item {
-  background: var(--card-bg);
-  border-radius: var(--radius-md);
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  border: 1px solid var(--card-border);
-}
-
-.speed-card-item .label {
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 8px;
-  text-transform: uppercase;
-}
-
-.speed-card-item .value {
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--text);
 }
 
 /* Realtime Traffic Panel */
@@ -902,7 +867,6 @@ body.theme-light .latency-chart-wrap {
 }
 
 /* Quota Card */
-/* Quota Card */
 .total-box .quota-card {
   margin-top: 24px;
   background: transparent;
@@ -1017,8 +981,7 @@ body.theme-light .threshold-marker {
     padding: 30px 20px;
   }
   .cards,
-  .stats-grid,
-  .speed-cards {
+  .stats-grid {
     grid-template-columns: 1fr;
   }
   .realtime-metrics {
