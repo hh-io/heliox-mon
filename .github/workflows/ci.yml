@@ -18,10 +18,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.64.8
+      # 用 runner 的 Go 工具链自行编译 golangci-lint，
+      # 避免官方预编译二进制（go1.24 构建）因低于 go.mod 目标版本(1.25)而拒绝运行
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
 
   test:
     name: Test & Vet
