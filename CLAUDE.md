@@ -20,6 +20,19 @@ HELIOX_MON_PASS=test go run ./cmd/heliox-mon
 
 部署/运维（install/start/stop/update 等）由 heliox 仓库的 `deploy.sh monitor <cmd>` 驱动，不在本仓库内。
 
+## 发布流程（关键：push main ≠ 部署到 VPS）
+
+- **VPS 只认 GitHub Release。** heliox 仓库 `deploy.sh monitor install/update` 从
+  `releases/latest/download/heliox-mon-linux-<amd64|arm64>` 下预编译二进制，**从不从源码构建**。
+  因此：**只 `git push` 到 main，VPS 永远拉不到新代码**——前端是 `go:embed` 内嵌的，必须重新发版。
+- **发新版就三步**：① 改 `CHANGELOG.md`（`[Unreleased]` → `[X.Y.Z] - 日期`）并 commit；
+  ② `git tag vX.Y.Z`；③ `git push --follow-tags`。tag 一推，`.github/workflows/release.yml`
+  自动 `make release` + 生成 `SHA256SUMS` + 发 Release（成为 `latest`）。**不要再手动
+  `gh release create`**，会和 CI 撞车。之后 VPS 上 `sudo ./deploy.sh monitor update`。
+- **版本号**由 `git describe --tags` 经 `-ldflags -X main.Version` 注入；release 工作流用
+  `fetch-depth: 0` 拿全 tag。新增功能走 minor，修复走 patch（语义化版本）。
+- 验证线上二进制是否含改动：`curl -su admin:密码 http://127.0.0.1:9100/ | grep -c <新标记>`。
+
 ## 测试与质量门禁
 
 - **CI**（`.github/workflows/ci.yml`）在 push/PR 时跑：`golangci-lint` + `go vet` + `go test` + 三平台构建（linux amd64/arm64 + darwin，保护 mock 路径）+ `govulncheck`。门禁在 **Linux** 上运行。
@@ -38,6 +51,7 @@ HELIOX_MON_PASS=test go run ./cmd/heliox-mon
 - **配置全部来自环境变量**（`internal/config/config.go`），无配置文件；唯一例外是读取 heliox 的 `.env` 以获取 `SNELL_PORT`/`VLESS_PORT`。`HELIOX_MON_PASS` 必填，缺失则启动失败。
 - **认证**：Web 用随机 token + HttpOnly Cookie 会话，`/api/*` 同时兼容 Basic Auth；可选 Cloudflare Turnstile。
 - **数据流**：`collector` 每秒/每分钟采集 -> 写快照表 -> 每分钟降采样为日汇总(`*_daily`)；`api` 读库返回 JSON，实时网速经 SSE (`/api/traffic/realtime`) 从采集器内存推送。
+- **通知（Telegram）** 集中在 `internal/notifier`：阈值流量预警（`alert_records` 表做 24h 冷却）、每日流量报告（`SendDailyReport`，采集器 `runDailyReport` 用定时器对齐到 `DAILY_REPORT_HOUR` 整点、重启不重发）、页面测试发送（`SendTest` ← `POST /api/notify/test`）。三类消息都带 `[SERVER_NAME]` 前缀以区分多机。新增相关配置项时同步更新 `.env.example` 与 README 环境变量表。
 
 ## 统计准确性（改动相关代码时务必保持）
 
