@@ -10,6 +10,9 @@
 - 每日流量报告：可选定时通过 Telegram 推送昨日用量 + 本计费周期累计/剩余/重置日。
   由 `DAILY_REPORT_ENABLED` 开关、`DAILY_REPORT_HOUR` 指定推送时刻（按时区整点，默认 9 点），
   定时器对齐到下一次触发，进程重启不重复推送。
+- 页面「通知」区块：显示 Telegram 是否已配置、每日报告开关/时刻，并提供「发送测试消息」
+  按钮即时验证配置（成功/失败原因回显）。新增 `POST /api/notify/test`，`GET /api/config`
+  补充 `daily_report` 字段。
 
 ## [0.11.0] - 2026-07-01
 

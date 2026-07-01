@@ -164,6 +164,24 @@ func formatBytes(b int64) string {
 	return fmt.Sprintf("%.2f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
+// SendTest 发送一条测试消息，用于在页面上验证 Telegram 是否配置成功。
+// 未配置时返回错误，让调用方把原因回显到界面。
+func (n *Notifier) SendTest() error {
+	if n.cfg.TelegramBotToken == "" || n.cfg.TelegramChatID == "" {
+		return fmt.Errorf("未配置 Telegram（TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID）")
+	}
+
+	msg := fmt.Sprintf(`✅ 测试消息 [%s]
+
+Heliox Monitor 的 Telegram 通知已配置成功。
+⏰ %s`,
+		n.cfg.ServerName,
+		time.Now().In(n.cfg.Timezone).Format("2006-01-02 15:04:05 MST"),
+	)
+
+	return n.sendTelegram(msg)
+}
+
 // sendTelegram 发送 Telegram 消息
 func (n *Notifier) sendTelegram(text string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", n.cfg.TelegramBotToken)

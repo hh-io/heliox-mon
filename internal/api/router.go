@@ -32,6 +32,7 @@ type Server struct {
 	db               *storage.DB
 	server           *http.Server
 	realtimeProvider RealtimeDataProvider
+	notifier         Notifier
 	sessions         sync.Map // token -> expireTime(int64)
 	stopCleanup      chan struct{}
 
@@ -46,12 +47,18 @@ type RealtimeDataProvider interface {
 	GetRealtimeSpeed() (txSpeed, rxSpeed float64, ts int64)
 }
 
+// Notifier 通知发送接口（用于页面「测试发送」验证配置）
+type Notifier interface {
+	SendTest() error
+}
+
 // NewServer 创建服务器
-func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeDataProvider) *Server {
+func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeDataProvider, notifier Notifier) *Server {
 	s := &Server{
 		cfg:              cfg,
 		db:               db,
 		realtimeProvider: realtimeProvider,
+		notifier:         notifier,
 		stopCleanup:      make(chan struct{}),
 	}
 
@@ -71,6 +78,7 @@ func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeData
 	mux.HandleFunc("/api/traffic/ports", s.auth(s.handlePortTraffic))
 	mux.HandleFunc("/api/latency", s.auth(s.handleLatency))
 	mux.HandleFunc("/api/config", s.auth(s.handleConfig))
+	mux.HandleFunc("/api/notify/test", s.auth(s.handleNotifyTest))
 
 	// 静态文件 (Auth with exceptions)
 	mux.HandleFunc("/", s.auth(s.handleStatic))
@@ -109,6 +117,15 @@ func (s *Server) Stop() {
 // （响应体已开始写出，无法再修改状态码）
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("写出 JSON 响应失败: %v", err)
+	}
+}
+
+// writeJSONStatus 以指定 HTTP 状态码输出 JSON
+func writeJSONStatus(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("写出 JSON 响应失败: %v", err)
 	}
@@ -985,7 +1002,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"reset_day":        s.cfg.ResetDay,
 			"alert_thresholds": s.cfg.AlertThresholds,
 			"ping_targets":     s.cfg.PingTargets,
-			"telegram_enabled": s.cfg.TelegramBotToken != "",
+			"telegram_enabled": s.cfg.TelegramBotToken != "" && s.cfg.TelegramChatID != "",
+			"daily_report": map[string]interface{}{
+				"enabled": s.cfg.DailyReportEnabled,
+				"hour":    s.cfg.DailyReportHour,
+			},
 		}
 		writeJSON(w, cfg)
 		return
@@ -993,6 +1014,30 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	// POST 更新配置 (TODO: 持久化到数据库)
 	http.Error(w, "Not implemented", http.StatusNotImplemented)
+}
+
+// handleNotifyTest 发送一条测试通知，用于在页面上验证 Telegram 是否配置成功
+func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.notifier == nil {
+		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"ok": false, "message": "通知器未初始化",
+		})
+		return
+	}
+
+	if err := s.notifier.SendTest(); err != nil {
+		// 未配置或 Telegram API 报错都回显具体原因，便于排查
+		writeJSONStatus(w, http.StatusBadGateway, map[string]interface{}{
+			"ok": false, "message": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{"ok": true, "message": "测试消息已发送，请检查 Telegram"})
 }
 
 // handleStatic 静态文件服务（使用嵌入文件）

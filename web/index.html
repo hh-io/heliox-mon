@@ -267,6 +267,29 @@
           </div>
         </div>
       </div>
+
+      <!-- 通知 -->
+      <div class="section">
+        <div class="section-title">通知</div>
+        <div class="chart-container notify-card">
+          <div class="notify-status">
+            <div class="notify-item">
+              <span class="notify-label">Telegram</span>
+              <span id="telegram-status" class="notify-badge">检测中…</span>
+            </div>
+            <div class="notify-item">
+              <span class="notify-label">每日报告</span>
+              <span id="daily-report-status" class="notify-badge">检测中…</span>
+            </div>
+          </div>
+          <div class="notify-actions">
+            <button id="notify-test-btn" class="btn btn-sm" disabled>
+              发送测试消息
+            </button>
+            <span id="notify-test-result" class="notify-result"></span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="vendor/chart.umd.min.js"></script>

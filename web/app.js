@@ -1920,6 +1920,72 @@ function setupTrendToggle() {
 }
 
 // 初始化
+// 拉取通知配置状态，更新 Telegram / 每日报告徽章
+async function fetchNotifyStatus() {
+  const tgEl = document.getElementById("telegram-status");
+  const drEl = document.getElementById("daily-report-status");
+  const testBtn = document.getElementById("notify-test-btn");
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const cfg = await res.json();
+
+    const enabled = !!cfg.telegram_enabled;
+    if (tgEl) {
+      tgEl.textContent = enabled ? "已配置" : "未配置";
+      tgEl.className = "notify-badge " + (enabled ? "is-on" : "is-off");
+    }
+
+    const dr = cfg.daily_report || {};
+    if (drEl) {
+      drEl.textContent = dr.enabled ? `每天 ${dr.hour} 点` : "已关闭";
+      drEl.className = "notify-badge " + (dr.enabled ? "is-on" : "is-off");
+    }
+
+    // 未配置 Telegram 时禁用测试按钮，避免必然失败的点击
+    if (testBtn) testBtn.disabled = !enabled;
+  } catch (e) {
+    console.error("获取通知配置失败", e);
+    if (tgEl) {
+      tgEl.textContent = "获取失败";
+      tgEl.className = "notify-badge is-off";
+    }
+  }
+}
+
+// 绑定「发送测试消息」按钮：调用后端即时验证 Telegram 是否可达
+function setupNotifyTest() {
+  const btn = document.getElementById("notify-test-btn");
+  const result = document.getElementById("notify-test-result");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "发送中…";
+    if (result) {
+      result.textContent = "";
+      result.className = "notify-result";
+    }
+    try {
+      const res = await fetch("/api/notify/test", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (result) {
+        result.textContent =
+          data.message || (res.ok ? "已发送" : "发送失败");
+        result.className = "notify-result " + (res.ok ? "is-ok" : "is-err");
+      }
+    } catch (e) {
+      if (result) {
+        result.textContent = "请求失败：" + e.message;
+        result.className = "notify-result is-err";
+      }
+    } finally {
+      btn.textContent = original;
+      btn.disabled = false;
+    }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   fetchStats();
   fetchSystem();
@@ -1928,6 +1994,8 @@ document.addEventListener("DOMContentLoaded", () => {
   connectRealtime();
   setupTrendToggle();
   initThemeToggle();
+  fetchNotifyStatus();
+  setupNotifyTest();
 
   // 延迟监控时间选择器
   const latencyEndEl = document.getElementById("latency-end");
