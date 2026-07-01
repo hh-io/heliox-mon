@@ -11,6 +11,48 @@
     <div class="wrapper">
       <div class="top-bar">
         <div id="server-name" class="server-pill">Server</div>
+
+        <!-- 通知胶囊：仅在配置了 Telegram 时显示，点击弹出测试面板 -->
+        <div class="notify-wrap">
+          <button
+            id="notify-pill"
+            class="notify-pill"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            hidden
+          >
+            <svg
+              class="notify-pill-icon"
+              viewBox="0 0 24 24"
+              width="14"
+              height="14"
+              aria-hidden="true"
+            >
+              <path
+                fill="currentColor"
+                d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-5v-1l-1.6-1.6V9.5a5.4 5.4 0 0 0-4.15-5.26V3.5a1.25 1.25 0 0 0-2.5 0v.74A5.4 5.4 0 0 0 6.6 9.5v4.9L5 16v1Z"
+              />
+            </svg>
+            <span id="notify-pill-text">通知</span>
+          </button>
+
+          <div id="notify-popover" class="notify-popover" role="dialog" hidden>
+            <div class="notify-pop-row">
+              <span class="notify-pop-label">Telegram</span>
+              <span id="tg-pop-status" class="notify-badge">—</span>
+            </div>
+            <div class="notify-pop-row">
+              <span class="notify-pop-label">每日报告</span>
+              <span id="dr-pop-status" class="notify-badge">—</span>
+            </div>
+            <button id="notify-test-btn" class="btn btn-sm" type="button">
+              发送测试消息
+            </button>
+            <div id="notify-test-result" class="notify-result"></div>
+          </div>
+        </div>
+
         <button id="theme-toggle" class="theme-toggle" type="button">
           <span class="theme-swatch"></span>
           <span class="theme-text">深色</span>
@@ -264,29 +306,6 @@
 
           <div class="latency-chart-wrap">
             <div id="latency-chart"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 通知 -->
-      <div class="section">
-        <div class="section-title">通知</div>
-        <div class="chart-container notify-card">
-          <div class="notify-status">
-            <div class="notify-item">
-              <span class="notify-label">Telegram</span>
-              <span id="telegram-status" class="notify-badge">检测中…</span>
-            </div>
-            <div class="notify-item">
-              <span class="notify-label">每日报告</span>
-              <span id="daily-report-status" class="notify-badge">检测中…</span>
-            </div>
-          </div>
-          <div class="notify-actions">
-            <button id="notify-test-btn" class="btn btn-sm" disabled>
-              发送测试消息
-            </button>
-            <span id="notify-test-result" class="notify-result"></span>
           </div>
         </div>
       </div>

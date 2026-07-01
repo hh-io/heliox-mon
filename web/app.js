@@ -1920,43 +1920,76 @@ function setupTrendToggle() {
 }
 
 // 初始化
-// 拉取通知配置状态，更新 Telegram / 每日报告徽章
+// 拉取通知配置：未配置 Telegram 则隐藏胶囊，保持顶栏干净；
+// 已配置则显示胶囊（每日报告开启时文案为推送时刻）并填充弹层状态
 async function fetchNotifyStatus() {
-  const tgEl = document.getElementById("telegram-status");
-  const drEl = document.getElementById("daily-report-status");
-  const testBtn = document.getElementById("notify-test-btn");
+  const pill = document.getElementById("notify-pill");
+  const pillText = document.getElementById("notify-pill-text");
+  const tgStatus = document.getElementById("tg-pop-status");
+  const drStatus = document.getElementById("dr-pop-status");
+  if (!pill) return;
   try {
     const res = await fetch("/api/config");
     if (!res.ok) throw new Error("HTTP " + res.status);
     const cfg = await res.json();
 
-    const enabled = !!cfg.telegram_enabled;
-    if (tgEl) {
-      tgEl.textContent = enabled ? "已配置" : "未配置";
-      tgEl.className = "notify-badge " + (enabled ? "is-on" : "is-off");
+    if (!cfg.telegram_enabled) {
+      pill.hidden = true;
+      return;
     }
+    pill.hidden = false;
 
     const dr = cfg.daily_report || {};
-    if (drEl) {
-      drEl.textContent = dr.enabled ? `每天 ${dr.hour} 点` : "已关闭";
-      drEl.className = "notify-badge " + (dr.enabled ? "is-on" : "is-off");
-    }
+    const timeLabel =
+      dr.enabled && dr.hour != null
+        ? `每日 ${String(dr.hour).padStart(2, "0")}:00`
+        : null;
 
-    // 未配置 Telegram 时禁用测试按钮，避免必然失败的点击
-    if (testBtn) testBtn.disabled = !enabled;
+    if (pillText) pillText.textContent = timeLabel || "通知";
+    if (tgStatus) {
+      tgStatus.textContent = "已配置";
+      tgStatus.className = "notify-badge is-on";
+    }
+    if (drStatus) {
+      drStatus.textContent = timeLabel ? `每天 ${timeLabel.slice(3)}` : "已关闭";
+      drStatus.className = "notify-badge " + (dr.enabled ? "is-on" : "is-off");
+    }
   } catch (e) {
     console.error("获取通知配置失败", e);
-    if (tgEl) {
-      tgEl.textContent = "获取失败";
-      tgEl.className = "notify-badge is-off";
-    }
+    pill.hidden = true; // 拿不到状态时不显示，避免误导
   }
 }
 
-// 绑定「发送测试消息」按钮：调用后端即时验证 Telegram 是否可达
-function setupNotifyTest() {
-  const btn = document.getElementById("notify-test-btn");
+// 通知胶囊：点击开合弹层（点击外部 / Esc 关闭），弹层内「发送测试消息」即时验证
+function setupNotifyPill() {
+  const pill = document.getElementById("notify-pill");
+  const pop = document.getElementById("notify-popover");
+  if (!pill || !pop) return;
+
   const result = document.getElementById("notify-test-result");
+  const setOpen = (open) => {
+    pop.hidden = !open;
+    pill.setAttribute("aria-expanded", String(open));
+    // 每次重新打开清掉上次的测试结果，避免残留旧的成功/失败提示
+    if (open && result) {
+      result.textContent = "";
+      result.className = "notify-result";
+    }
+  };
+
+  pill.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setOpen(pop.hidden);
+  });
+  pop.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => {
+    if (!pop.hidden) setOpen(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !pop.hidden) setOpen(false);
+  });
+
+  const btn = document.getElementById("notify-test-btn");
   if (!btn) return;
   btn.addEventListener("click", async () => {
     btn.disabled = true;
@@ -1970,8 +2003,7 @@ function setupNotifyTest() {
       const res = await fetch("/api/notify/test", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (result) {
-        result.textContent =
-          data.message || (res.ok ? "已发送" : "发送失败");
+        result.textContent = data.message || (res.ok ? "已发送" : "发送失败");
         result.className = "notify-result " + (res.ok ? "is-ok" : "is-err");
       }
     } catch (e) {
@@ -1995,7 +2027,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupTrendToggle();
   initThemeToggle();
   fetchNotifyStatus();
-  setupNotifyTest();
+  setupNotifyPill();
 
   // 延迟监控时间选择器
   const latencyEndEl = document.getElementById("latency-end");
