@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# 同分支新 push 自动取消仍在跑的旧 run，避免连续提交堆积无用运行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
