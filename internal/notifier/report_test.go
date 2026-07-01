@@ -1,6 +1,9 @@
 package notifier
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestBillingUsed(t *testing.T) {
 	const tx, rx int64 = 100, 250
@@ -31,5 +34,44 @@ func TestFormatBytes(t *testing.T) {
 		if got := formatBytes(in); got != want {
 			t.Errorf("formatBytes(%d)=%q，期望 %q", in, got, want)
 		}
+	}
+}
+
+func TestTrendText(t *testing.T) {
+	cases := []struct {
+		today, prev int64
+		want        string
+	}{
+		{100, 0, "无对比"},  // 前日无数据
+		{120, 100, "↑20.0%"}, // 上升
+		{80, 100, "↓20.0%"},  // 下降
+		{100, 100, "持平"},   // 无变化
+	}
+	for _, c := range cases {
+		if got := trendText(c.today, c.prev); got != c.want {
+			t.Errorf("trendText(%d,%d)=%q，期望 %q", c.today, c.prev, got, c.want)
+		}
+	}
+}
+
+func TestProgressBar(t *testing.T) {
+	cases := map[float64]string{
+		0:   "░░░░░░░░░░",
+		50:  "█████░░░░░",
+		100: "██████████",
+		150: "██████████", // 超限按满格
+	}
+	for in, want := range cases {
+		if got := progressBar(in); got != want {
+			t.Errorf("progressBar(%.0f)=%q，期望 %q", in, got, want)
+		}
+	}
+}
+
+func TestWeekdayCN(t *testing.T) {
+	// 2026-07-01 是周三
+	d := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if got := weekdayCN(d); got != "周三" {
+		t.Errorf("weekdayCN=%q，期望 周三", got)
 	}
 }

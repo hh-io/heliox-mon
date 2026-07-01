@@ -111,6 +111,9 @@ func (c *Collector) Start() {
 
 	// 每日流量报告（需显式开启且配好 Telegram）
 	if c.notifier != nil && c.cfg.DailyReportEnabled {
+		if c.cfg.TelegramBotToken == "" || c.cfg.TelegramChatID == "" {
+			log.Println("警告: DAILY_REPORT_ENABLED=true 但未配置 TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID，每日报告将不会发送")
+		}
 		c.wg.Add(1)
 		go c.runDailyReport()
 	}
@@ -205,6 +208,7 @@ func (c *Collector) runDailyReport() {
 
 	for {
 		next := nextReportTime(time.Now().In(c.cfg.Timezone), c.cfg.DailyReportHour, c.cfg.Timezone)
+		log.Printf("每日流量报告下次推送时间: %s", next.Format("2006-01-02 15:04:05 MST"))
 		timer := time.NewTimer(time.Until(next))
 		select {
 		case <-c.stop:
@@ -213,6 +217,8 @@ func (c *Collector) runDailyReport() {
 		case <-timer.C:
 			if err := c.notifier.SendDailyReport(); err != nil {
 				log.Printf("发送每日流量报告失败: %v", err)
+			} else {
+				log.Println("每日流量报告已推送")
 			}
 		}
 	}

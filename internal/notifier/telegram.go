@@ -69,7 +69,7 @@ func (n *Notifier) SendTrafficAlert(usedGB, limitGB int, percent float64, resetD
 	return nil
 }
 
-// SendDailyReport 推送每日流量摘要（昨日用量 + 本计费周期累计）。
+// SendDailyReport 推送每日流量摘要（昨日用量 + 环比 + 本计费周期累计与月底预测）。
 // 未配置 Telegram 时静默跳过，由调用方决定是否启用定时器。
 func (n *Notifier) SendDailyReport() error {
 	if n.cfg.TelegramBotToken == "" || n.cfg.TelegramChatID == "" {
@@ -78,16 +78,17 @@ func (n *Notifier) SendDailyReport() error {
 
 	tz := n.cfg.Timezone
 	now := time.Now().In(tz)
-	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	yTime := now.AddDate(0, 0, -1)
+	yesterday := yTime.Format("2006-01-02")
+	dayBefore := now.AddDate(0, 0, -2).Format("2006-01-02")
 
 	// 昨日流量（此时昨日的日汇总已由采集器固化）
-	var yTx, yRx int64
-	if err := n.db.QueryRow(
-		"SELECT COALESCE(tx_bytes, 0), COALESCE(rx_bytes, 0) FROM traffic_daily WHERE date = ? AND iface = 'total'",
-		yesterday,
-	).Scan(&yTx, &yRx); err != nil && err != sql.ErrNoRows {
-		log.Printf("查询昨日流量失败: %v", err)
-	}
+	yTx, yRx := n.dailyTotal(yesterday)
+	// 前日流量：用于计算环比趋势
+	bTx, bRx := n.dailyTotal(dayBefore)
+
+	yTotal := yTx + yRx
+	bTotal := bTx + bRx
 
 	// 本计费周期累计（含今日已采集部分，与配额预警口径一致）
 	billingStart, billingEnd := n.cfg.GetBillingCycleDates(now)
@@ -102,18 +103,29 @@ func (n *Notifier) SendDailyReport() error {
 	used := billingUsed(n.cfg.BillingMode, cTx, cRx)
 	daysLeft := int(billingEnd.Sub(now).Hours() / 24)
 
-	msg := fmt.Sprintf(`📊 每日流量报告 [%s]
-🗓 %s
+	// 周期已过天数（含今日）与总天数，用于日均和月底预测
+	elapsedDays := int(now.Sub(billingStart).Hours()/24) + 1
+	if elapsedDays < 1 {
+		elapsedDays = 1
+	}
+	totalDays := int(billingEnd.Sub(billingStart).Hours()/24) + 1
+	dailyAvg := used / int64(elapsedDays)
+	projected := dailyAvg * int64(totalDays)
 
-昨日: ↑%s ↓%s（共 %s）
-本周期已用: %s`,
+	msg := fmt.Sprintf(`📊 每日流量报告 · %s
+🗓 %s（%s）
+━━━━━━━━━━━━━━
+
+昨日用量
+  ↑ %s    ↓ %s
+  合计 %s（环比 %s）`,
 		n.cfg.ServerName,
-		yesterday,
-		formatBytes(yTx), formatBytes(yRx), formatBytes(yTx+yRx),
-		formatBytes(used),
+		yesterday, weekdayCN(yTime),
+		formatBytes(yTx), formatBytes(yRx),
+		formatBytes(yTotal), trendText(yTotal, bTotal),
 	)
 
-	// 设了限额才给出百分比/剩余量，否则只报累计值
+	// 设了限额：给出进度条/百分比/剩余量/月底预测；否则只报累计与均值
 	if n.cfg.MonthlyLimitGB > 0 {
 		limitBytes := int64(n.cfg.MonthlyLimitGB) * 1024 * 1024 * 1024
 		percent := float64(used) / float64(limitBytes) * 100
@@ -121,16 +133,91 @@ func (n *Notifier) SendDailyReport() error {
 		if remain < 0 {
 			remain = 0
 		}
-		msg += fmt.Sprintf(` / %d GB（%.1f%%）
-剩余: %s`,
-			n.cfg.MonthlyLimitGB, percent, formatBytes(remain))
+		projWarn := ""
+		if projected > limitBytes {
+			projWarn = " ⚠️ 或超限"
+		}
+		msg += fmt.Sprintf(`
+
+本周期用量
+  %s %.1f%%
+  已用 %s / %s
+  剩余 %s
+  日均 %s ｜ 预计 %s%s
+  重置 %s（%d 天后）`,
+			progressBar(percent), percent,
+			formatBytes(used), formatBytes(limitBytes),
+			formatBytes(remain),
+			formatBytes(dailyAvg), formatBytes(projected), projWarn,
+			billingEnd.Format("2006-01-02"), daysLeft,
+		)
+	} else {
+		msg += fmt.Sprintf(`
+
+本周期用量
+  已用 %s
+  日均 %s ｜ 预计 %s
+  重置 %s（%d 天后）`,
+			formatBytes(used),
+			formatBytes(dailyAvg), formatBytes(projected),
+			billingEnd.Format("2006-01-02"), daysLeft,
+		)
 	}
 
-	msg += fmt.Sprintf(`
-重置: %s（%d 天后）`,
-		billingEnd.Format("2006-01-02"), daysLeft)
-
 	return n.sendTelegram(msg)
+}
+
+// dailyTotal 读取某天 total 网卡的上/下行字节，无记录时返回 0。
+func (n *Notifier) dailyTotal(date string) (tx, rx int64) {
+	if err := n.db.QueryRow(
+		"SELECT COALESCE(tx_bytes, 0), COALESCE(rx_bytes, 0) FROM traffic_daily WHERE date = ? AND iface = 'total'",
+		date,
+	).Scan(&tx, &rx); err != nil && err != sql.ErrNoRows {
+		log.Printf("查询 %s 流量失败: %v", date, err)
+	}
+	return tx, rx
+}
+
+// weekdayCN 返回中文星期几
+func weekdayCN(t time.Time) string {
+	return [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}[t.Weekday()]
+}
+
+// trendText 计算今日相对前一日的环比变化文案；前一日无数据时返回占位符。
+func trendText(today, prev int64) string {
+	if prev <= 0 {
+		return "无对比"
+	}
+	delta := float64(today-prev) / float64(prev) * 100
+	switch {
+	case delta > 0:
+		return fmt.Sprintf("↑%.1f%%", delta)
+	case delta < 0:
+		return fmt.Sprintf("↓%.1f%%", -delta)
+	default:
+		return "持平"
+	}
+}
+
+// progressBar 用 10 格方块渲染百分比进度条（0-100，超出按满格显示）。
+func progressBar(percent float64) string {
+	const width = 10
+	filled := int(percent/10 + 0.5)
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	bar := make([]rune, 0, width)
+	for i := 0; i < width; i++ {
+		if i < filled {
+			bar = append(bar, '█')
+		} else {
+			bar = append(bar, '░')
+		}
+	}
+	return string(bar)
 }
 
 // billingUsed 按计费模式从上/下行字节计算「已用流量」
