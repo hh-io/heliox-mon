@@ -100,6 +100,8 @@ uninstall  # 卸载
 | `ALERT_THRESHOLDS`        | 报警阈值百分比（逗号分隔）    | 80,90,95                          |
 | `TELEGRAM_BOT_TOKEN`      | Telegram Bot Token            | 空                                |
 | `TELEGRAM_CHAT_ID`        | Telegram 接收会话 ID          | 空                                |
+| `DAILY_REPORT_ENABLED`    | 每日流量报告推送开关          | false                             |
+| `DAILY_REPORT_HOUR`       | 每日报告推送时刻（0-23 整点） | 9                                 |
 | `HELIOX_TURNSTILE_SECRET` | Cloudflare Turnstile 密钥     | 空（设置后启用人机验证）          |
 | `PING_TARGETS`            | 延迟监控目标 (`TAG:IP`)       | Google:8.8.8.8,Cloudflare:1.1.1.1 |
 | `PING_COUNT`              | 每次 ping 发包数              | 5                                 |
@@ -114,6 +116,26 @@ uninstall  # 卸载
 | tx_only       | 仅计算上行        |
 | rx_only       | 仅计算下行        |
 | max_value     | 取上行/下行较大值 |
+
+### 申请 Telegram Bot Token 与 Chat ID
+
+流量预警和每日报告都通过 Telegram Bot 推送，需要两个值：
+
+1. **Bot Token**：在 Telegram 里找 [@BotFather](https://t.me/BotFather)，发送 `/newbot`，
+   按提示设置机器人名称，创建后它会返回形如 `123456789:AA...` 的 token，即 `TELEGRAM_BOT_TOKEN`。
+2. **Chat ID**：先给你刚建的机器人发一条任意消息（否则机器人无权私聊你），然后：
+   - 私聊场景：把消息转发给 [@userinfobot](https://t.me/userinfobot)，它会告诉你数字 ID；
+     或访问 `https://api.telegram.org/bot<TOKEN>/getUpdates`，在返回 JSON 里找 `chat.id`。
+   - 群组/频道推送：把机器人拉进群，群里发一条消息后同样用 `getUpdates` 取 `chat.id`
+     （群 ID 通常是负数）。
+3. 把两个值填入 `.env` 的 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`。
+
+### 每日流量报告 (DAILY_REPORT_ENABLED)
+
+设 `DAILY_REPORT_ENABLED=true` 后，每天在 `DAILY_REPORT_HOUR`（按 `HELIOX_MON_TZ`
+时区的整点，默认 9 点）通过 Telegram 推送一条摘要：昨日上/下行用量、本计费周期累计、
+占限额百分比与剩余量、周期重置日。**需先配好 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`**，
+否则静默跳过。推送时刻按定时器对齐，进程重启会重新计算下一次，不会重复推送。
 
 修改后执行 `sudo ./deploy.sh monitor restart` 生效。
 

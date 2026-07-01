@@ -48,6 +48,10 @@ type Config struct {
 	TelegramBotToken string
 	TelegramChatID   string
 
+	// 每日流量报告（Telegram 定时推送）
+	DailyReportEnabled bool
+	DailyReportHour    int // 推送时刻（按 Timezone 的整点，0-23）
+
 	// 流量报警
 	MonthlyLimitGB  int
 	BillingMode     string // bidirectional, tx_only, rx_only, max_value
@@ -77,6 +81,8 @@ func Load() (*Config, error) {
 		HelioxEnvPath:      getEnv("HELIOX_ENV_PATH", "../heliox/.env"),
 		TelegramBotToken:   getEnv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:     getEnv("TELEGRAM_CHAT_ID", ""),
+		DailyReportEnabled: getEnvBool("DAILY_REPORT_ENABLED", false),
+		DailyReportHour:    getEnvInt("DAILY_REPORT_HOUR", 9),
 		MonthlyLimitGB:     getEnvInt("MONTHLY_LIMIT_GB", 1000),
 		BillingMode:        getEnv("BILLING_MODE", "bidirectional"),
 		ResetDay:           getEnvInt("RESET_DAY", 1),
@@ -124,6 +130,11 @@ func Load() (*Config, error) {
 		// 非致命错误，使用默认值
 		cfg.SnellPort = 36890
 		cfg.VlessPort = 443
+	}
+
+	// 钳制每日报告时刻到合法整点，非法值回退到默认 9 点
+	if cfg.DailyReportHour < 0 || cfg.DailyReportHour > 23 {
+		cfg.DailyReportHour = 9
 	}
 
 	// 验证必填项
@@ -199,6 +210,18 @@ func getEnv(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+func getEnvBool(key string, defaultVal bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "":
+		return defaultVal
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func getEnvInt(key string, defaultVal int) int {

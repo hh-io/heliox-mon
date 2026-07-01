@@ -3,6 +3,7 @@ package notifier
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -66,6 +67,101 @@ func (n *Notifier) SendTrafficAlert(usedGB, limitGB int, percent float64, resetD
 	}
 
 	return nil
+}
+
+// SendDailyReport 推送每日流量摘要（昨日用量 + 本计费周期累计）。
+// 未配置 Telegram 时静默跳过，由调用方决定是否启用定时器。
+func (n *Notifier) SendDailyReport() error {
+	if n.cfg.TelegramBotToken == "" || n.cfg.TelegramChatID == "" {
+		return nil
+	}
+
+	tz := n.cfg.Timezone
+	now := time.Now().In(tz)
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+
+	// 昨日流量（此时昨日的日汇总已由采集器固化）
+	var yTx, yRx int64
+	if err := n.db.QueryRow(
+		"SELECT COALESCE(tx_bytes, 0), COALESCE(rx_bytes, 0) FROM traffic_daily WHERE date = ? AND iface = 'total'",
+		yesterday,
+	).Scan(&yTx, &yRx); err != nil && err != sql.ErrNoRows {
+		log.Printf("查询昨日流量失败: %v", err)
+	}
+
+	// 本计费周期累计（含今日已采集部分，与配额预警口径一致）
+	billingStart, billingEnd := n.cfg.GetBillingCycleDates(now)
+	var cTx, cRx int64
+	if err := n.db.QueryRow(
+		"SELECT COALESCE(SUM(tx_bytes), 0), COALESCE(SUM(rx_bytes), 0) FROM traffic_daily WHERE date >= ? AND iface = 'total'",
+		billingStart.Format("2006-01-02"),
+	).Scan(&cTx, &cRx); err != nil && err != sql.ErrNoRows {
+		log.Printf("查询计费周期流量失败: %v", err)
+	}
+
+	used := billingUsed(n.cfg.BillingMode, cTx, cRx)
+	daysLeft := int(billingEnd.Sub(now).Hours() / 24)
+
+	msg := fmt.Sprintf(`📊 每日流量报告 [%s]
+🗓 %s
+
+昨日: ↑%s ↓%s（共 %s）
+本周期已用: %s`,
+		n.cfg.ServerName,
+		yesterday,
+		formatBytes(yTx), formatBytes(yRx), formatBytes(yTx+yRx),
+		formatBytes(used),
+	)
+
+	// 设了限额才给出百分比/剩余量，否则只报累计值
+	if n.cfg.MonthlyLimitGB > 0 {
+		limitBytes := int64(n.cfg.MonthlyLimitGB) * 1024 * 1024 * 1024
+		percent := float64(used) / float64(limitBytes) * 100
+		remain := limitBytes - used
+		if remain < 0 {
+			remain = 0
+		}
+		msg += fmt.Sprintf(` / %d GB（%.1f%%）
+剩余: %s`,
+			n.cfg.MonthlyLimitGB, percent, formatBytes(remain))
+	}
+
+	msg += fmt.Sprintf(`
+重置: %s（%d 天后）`,
+		billingEnd.Format("2006-01-02"), daysLeft)
+
+	return n.sendTelegram(msg)
+}
+
+// billingUsed 按计费模式从上/下行字节计算「已用流量」
+func billingUsed(mode string, tx, rx int64) int64 {
+	switch mode {
+	case "tx_only":
+		return tx
+	case "rx_only":
+		return rx
+	case "max_value":
+		if tx > rx {
+			return tx
+		}
+		return rx
+	default: // bidirectional
+		return tx + rx
+	}
+}
+
+// formatBytes 将字节数格式化为带单位的可读字符串
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 // sendTelegram 发送 Telegram 消息

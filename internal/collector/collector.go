@@ -53,6 +53,7 @@ type RealtimeSnapshot struct {
 // Notifier 通知器接口
 type Notifier interface {
 	SendTrafficAlert(usedGB, limitGB int, percent float64, resetDate string, daysLeft int, threshold int) error
+	SendDailyReport() error
 }
 
 // New 创建采集器
@@ -107,6 +108,12 @@ func (c *Collector) Start() {
 	// 日汇总任务（每分钟检查一次）
 	c.wg.Add(1)
 	go c.runDailyAggregation()
+
+	// 每日流量报告（需显式开启且配好 Telegram）
+	if c.notifier != nil && c.cfg.DailyReportEnabled {
+		c.wg.Add(1)
+		go c.runDailyReport()
+	}
 
 	log.Println("采集器已启动")
 }
@@ -188,6 +195,36 @@ func (c *Collector) runDailyAggregation() {
 			c.doDailyAggregation()
 		}
 	}
+}
+
+// runDailyReport 每天在配置的整点推送一次流量报告。
+// 用定时器对齐到「下一个触发时刻」而非每分钟轮询：重启后会重新计算下一次，
+// 因此进程重启不会重复推送（session 同样存内存，与项目现状一致）。
+func (c *Collector) runDailyReport() {
+	defer c.wg.Done()
+
+	for {
+		next := nextReportTime(time.Now().In(c.cfg.Timezone), c.cfg.DailyReportHour, c.cfg.Timezone)
+		timer := time.NewTimer(time.Until(next))
+		select {
+		case <-c.stop:
+			timer.Stop()
+			return
+		case <-timer.C:
+			if err := c.notifier.SendDailyReport(); err != nil {
+				log.Printf("发送每日流量报告失败: %v", err)
+			}
+		}
+	}
+}
+
+// nextReportTime 计算 now 之后下一个 hour 整点（按 tz）
+func nextReportTime(now time.Time, hour int, tz *time.Location) time.Time {
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, tz)
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next
 }
 
 // doDailyAggregation 执行日汇总
