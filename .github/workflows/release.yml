@@ -1,60 +1,43 @@
 name: Release
 
+# 推送 v* tag 时自动构建并发布 Release。
+# 注意：只有 tag 触发，push 到 main 不会发版——deploy.sh 的 `monitor update`
+# 只拉 releases/latest，因此发新版必须 `git tag vX.Y.Z && git push --follow-tags`。
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write
+  contents: write # 创建 Release、上传资产需要写权限
 
 jobs:
-  build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+  release:
+    name: Build & Publish
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 拉全 tag，make release 靠 `git describe --tags` 注入版本号
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
 
-      - name: Build
-        env:
-          CGO_ENABLED: 0
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          go build -ldflags="-s -w" -o heliox-mon-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/heliox-mon
+      # 复用 Makefile release 目标，与本地手动发布产物完全一致（含 -X main.Version 版本注入）
+      - name: Build release binaries
+        run: make release
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: heliox-mon-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: heliox-mon-${{ matrix.goos }}-${{ matrix.goarch }}
+      # 生成 checksum，供 deploy.sh 下载后校验完整性（文件名不含路径前缀，便于 sha256sum -c）
+      - name: Generate checksums
+        working-directory: build
+        run: sha256sum heliox-mon-linux-amd64 heliox-mon-linux-arm64 > SHA256SUMS
 
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: heliox-mon-*
-          merge-multiple: true
-
-      - name: Create Release
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: |
+            build/heliox-mon-linux-amd64
+            build/heliox-mon-linux-arm64
+            build/SHA256SUMS
           generate_release_notes: true
