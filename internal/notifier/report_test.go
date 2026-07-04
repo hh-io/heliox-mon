@@ -111,7 +111,7 @@ func TestDailyLatency(t *testing.T) {
 	insertLatencyNull(t, db, "2.2.2.2", 1300, 5, 5)
 
 	cfg := &config.Config{PingTargets: []config.PingTarget{
-		{Tag: "CF", IP: "1.1.1.1"},
+		{Tag: "A&B", IP: "1.1.1.1"}, // 含 HTML 元字符，验证转义
 		{Tag: "Bad", IP: "2.2.2.2"},
 	}}
 	n := New(cfg, db)
@@ -127,12 +127,15 @@ func TestDailyLatency(t *testing.T) {
 		t.Errorf("bad 目标 stats=%+v，期望 ok=false loss=100", stats[1])
 	}
 
-	// 小节文本应含目标名、ms 单位，全丢包目标标记无数据
+	// 小节应为 HTML 富文本：含加粗标题、<pre> 等宽块、ms 单位、无数据标记，且 Tag 已转义
 	sec := n.latencySection(start, end)
-	for _, want := range []string{"网络延迟", "CF", "ms", "Bad", "无数据"} {
+	for _, want := range []string{"<b>🌐 网络延迟</b>", "<pre>", "</pre>", "ms", "无数据", "A&amp;B"} {
 		if !strings.Contains(sec, want) {
 			t.Errorf("小节缺少 %q：\n%s", want, sec)
 		}
+	}
+	if strings.Contains(sec, "A&B") { // 未转义的原文不应出现
+		t.Errorf("Tag 未转义：\n%s", sec)
 	}
 }
 

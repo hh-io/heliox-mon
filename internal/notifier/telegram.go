@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"strings"
@@ -42,18 +43,14 @@ func (n *Notifier) SendTrafficAlert(usedGB, limitGB int, percent float64, resetD
 		return nil // 冷却期内
 	}
 
-	// 构造消息
-	msg := fmt.Sprintf(`⚠️ 流量预警 [%s]
-
-📊 当前: %d GB / %d GB (%.1f%%)
-📉 剩余: %d GB
-📅 重置: %s (%d 天后)
-
-⏰ 检测时间: %s`,
-		n.cfg.ServerName,
-		usedGB, limitGB, percent,
-		limitGB-usedGB,
-		resetDate, daysLeft,
+	// 构造消息（标题加粗，数据放 <pre> 等宽块）
+	msg := fmt.Sprintf("<b>⚠️ 流量预警 · %s</b>\n<pre>%s</pre>\n检测时间 %s",
+		esc(n.cfg.ServerName),
+		alignRows([][2]string{
+			{"当前", fmt.Sprintf("%d GB / %d GB (%.1f%%)", usedGB, limitGB, percent)},
+			{"剩余", fmt.Sprintf("%d GB", limitGB-usedGB)},
+			{"重置", fmt.Sprintf("%s（%d 天后）", resetDate, daysLeft)},
+		}),
 		time.Now().In(n.cfg.Timezone).Format("2006-01-02 15:04 MST"),
 	)
 
@@ -113,20 +110,19 @@ func (n *Notifier) SendDailyReport() error {
 	dailyAvg := used / int64(elapsedDays)
 	projected := dailyAvg * int64(totalDays)
 
-	msg := fmt.Sprintf(`📊 每日流量报告 · %s
-🗓 %s（%s）
-━━━━━━━━━━━━━━
-
-昨日用量
-  ↑ %s    ↓ %s
-  合计 %s（环比 %s）`,
-		n.cfg.ServerName,
+	// 标题 + 昨日用量（数据行放 <pre> 等宽块，emoji 仅在加粗标题里）
+	msg := fmt.Sprintf("<b>📊 每日流量报告 · %s</b>\n%s（%s）\n\n<b>昨日用量</b>\n<pre>%s</pre>",
+		esc(n.cfg.ServerName),
 		yesterday, weekdayCN(yTime),
-		formatBytes(yTx), formatBytes(yRx),
-		formatBytes(yTotal), trendText(yTotal, bTotal),
+		alignRows([][2]string{
+			{"上行", formatBytes(yTx)},
+			{"下行", formatBytes(yRx)},
+			{"合计", formatBytes(yTotal) + "  环比 " + trendText(yTotal, bTotal)},
+		}),
 	)
 
 	// 设了限额：给出进度条/百分比/剩余量/月底预测；否则只报累计与均值
+	reset := fmt.Sprintf("%s（%d 天后）", billingEnd.Format("2006-01-02"), daysLeft)
 	if n.cfg.MonthlyLimitGB > 0 {
 		limitBytes := int64(n.cfg.MonthlyLimitGB) * 1024 * 1024 * 1024
 		percent := float64(used) / float64(limitBytes) * 100
@@ -134,34 +130,26 @@ func (n *Notifier) SendDailyReport() error {
 		if remain < 0 {
 			remain = 0
 		}
-		projWarn := ""
+		projText := formatBytes(projected)
 		if projected > limitBytes {
-			projWarn = " ⚠️ 或超限"
+			projText += " ⚠️ 或超限"
 		}
-		msg += fmt.Sprintf(`
-
-本周期用量
-  %s %.1f%%
-  已用 %s / %s
-  剩余 %s
-  日均 %s ｜ 预计 %s%s
-  重置 %s（%d 天后）`,
+		msg += fmt.Sprintf("\n\n<b>本周期用量</b>\n<pre>%s %.1f%%\n%s</pre>",
 			progressBar(percent), percent,
-			formatBytes(used), formatBytes(limitBytes),
-			formatBytes(remain),
-			formatBytes(dailyAvg), formatBytes(projected), projWarn,
-			billingEnd.Format("2006-01-02"), daysLeft,
+			alignRows([][2]string{
+				{"已用", formatBytes(used) + " / " + formatBytes(limitBytes)},
+				{"剩余", formatBytes(remain)},
+				{"日均", formatBytes(dailyAvg) + "  预计 " + projText},
+				{"重置", reset},
+			}),
 		)
 	} else {
-		msg += fmt.Sprintf(`
-
-本周期用量
-  已用 %s
-  日均 %s ｜ 预计 %s
-  重置 %s（%d 天后）`,
-			formatBytes(used),
-			formatBytes(dailyAvg), formatBytes(projected),
-			billingEnd.Format("2006-01-02"), daysLeft,
+		msg += fmt.Sprintf("\n\n<b>本周期用量</b>\n<pre>%s</pre>",
+			alignRows([][2]string{
+				{"已用", formatBytes(used)},
+				{"日均", formatBytes(dailyAvg) + "  预计 " + formatBytes(projected)},
+				{"重置", reset},
+			}),
 		)
 	}
 
@@ -222,33 +210,32 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 		return ""
 	}
 	hasData := false
-	width := 0 // 目标名对齐宽度（CJK 记 2）
 	for _, s := range stats {
 		if s.ok {
 			hasData = true
-		}
-		if w := displayWidth(s.tag); w > width {
-			width = w
+			break
 		}
 	}
 	if !hasData {
 		return ""
 	}
 
-	sec := "\n\n网络延迟"
+	rows := make([][2]string, 0, len(stats))
 	for _, s := range stats {
-		name := s.tag + spaces(width-displayWidth(s.tag))
 		if !s.ok {
-			sec += fmt.Sprintf("\n  %s  无数据", name)
+			rows = append(rows, [2]string{esc(s.tag), "无数据"})
 			continue
 		}
 		lossText := fmt.Sprintf("丢%.0f%%", s.loss)
 		if s.loss > 0 {
 			lossText += " ⚠️"
 		}
-		sec += fmt.Sprintf("\n  %s  %.1fms（最低 %.1f）%s", name, s.avgRTT, s.minRTT, lossText)
+		rows = append(rows, [2]string{
+			esc(s.tag),
+			fmt.Sprintf("%.1fms  最低 %.1f  %s", s.avgRTT, s.minRTT, lossText),
+		})
 	}
-	return sec
+	return "\n\n<b>🌐 网络延迟</b>\n<pre>" + alignRows(rows) + "</pre>"
 }
 
 // displayWidth 估算字符串显示宽度：CJK 及全角字符记 2，其余记 1，用于纯文本列对齐。
@@ -275,6 +262,33 @@ func spaces(n int) string {
 		return ""
 	}
 	return strings.Repeat(" ", n)
+}
+
+// esc 转义 HTML 元字符，供 parse_mode=HTML 下拼入用户可控字符串（服务器名、探测目标 Tag）。
+func esc(s string) string {
+	return html.EscapeString(s)
+}
+
+// alignRows 把 [label, value] 行渲染成等宽块：label 左对齐补到统一宽度，value 为
+// 自由文本紧随其后。用于 <pre> 块内的数据表对齐，宽度按 CJK 感知的 displayWidth 计。
+func alignRows(rows [][2]string) string {
+	labelW := 0
+	for _, r := range rows {
+		if w := displayWidth(r[0]); w > labelW {
+			labelW = w
+		}
+	}
+	var b strings.Builder
+	for i, r := range rows {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(r[0])
+		b.WriteString(spaces(labelW - displayWidth(r[0])))
+		b.WriteString("  ")
+		b.WriteString(r[1])
+	}
+	return b.String()
 }
 
 // dailyTotal 读取某天 total 网卡的上/下行字节，无记录时返回 0。
@@ -368,11 +382,8 @@ func (n *Notifier) SendTest() error {
 		return fmt.Errorf("未配置 Telegram（TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID）")
 	}
 
-	msg := fmt.Sprintf(`✅ 测试消息 [%s]
-
-Heliox Monitor 的 Telegram 通知已配置成功。
-⏰ %s`,
-		n.cfg.ServerName,
+	msg := fmt.Sprintf("<b>✅ 测试消息 · %s</b>\n\nHeliox Monitor 的 Telegram 通知已配置成功。\n%s",
+		esc(n.cfg.ServerName),
 		time.Now().In(n.cfg.Timezone).Format("2006-01-02 15:04:05 MST"),
 	)
 
@@ -384,8 +395,9 @@ func (n *Notifier) sendTelegram(text string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", n.cfg.TelegramBotToken)
 
 	payload := map[string]string{
-		"chat_id": n.cfg.TelegramChatID,
-		"text":    text,
+		"chat_id":    n.cfg.TelegramChatID,
+		"text":       text,
+		"parse_mode": "HTML",
 	}
 	body, _ := json.Marshal(payload)
 
