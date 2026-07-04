@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hh/heliox-mon/internal/config"
@@ -164,7 +165,116 @@ func (n *Notifier) SendDailyReport() error {
 		)
 	}
 
+	// 昨日各探测目标的网络延迟（窗口与「昨日用量」一致：昨日 00:00–24:00）
+	dayStart := time.Date(yTime.Year(), yTime.Month(), yTime.Day(), 0, 0, 0, 0, tz)
+	if sec := n.latencySection(dayStart.Unix(), dayStart.AddDate(0, 0, 1).Unix()); sec != "" {
+		msg += sec
+	}
+
 	return n.sendTelegram(msg)
+}
+
+// latencyStat 昨日单个探测目标的延迟汇总
+type latencyStat struct {
+	tag    string
+	avgRTT float64 // 平均 RTT（ms）
+	minRTT float64 // 整段最低 RTT（ms），最接近真实链路
+	loss   float64 // 丢包率（%）
+	ok     bool    // 是否有有效 RTT 数据点
+}
+
+// dailyLatency 汇总 [startTs, endTs) 内各 PingTarget 的延迟。
+// 聚合口径与 API 层 handleLatency 保持一致：AVG(rtt_ms)/MIN(min_rtt)/SUM(sent)/SUM(lost)。
+// 存库以 IP 作 target 标识，展示用 Tag。
+func (n *Notifier) dailyLatency(startTs, endTs int64) []latencyStat {
+	stats := make([]latencyStat, 0, len(n.cfg.PingTargets))
+	for _, pt := range n.cfg.PingTargets {
+		var avg, min sql.NullFloat64
+		var sent, lost int64
+		if err := n.db.QueryRow(
+			`SELECT AVG(rtt_ms), MIN(min_rtt), COALESCE(SUM(sent), 0), COALESCE(SUM(lost), 0)
+			 FROM latency_records WHERE target = ? AND ts >= ? AND ts < ?`,
+			pt.IP, startTs, endTs,
+		).Scan(&avg, &min, &sent, &lost); err != nil && err != sql.ErrNoRows {
+			log.Printf("查询 %s 延迟失败: %v", pt.Tag, err)
+			continue
+		}
+
+		loss := 0.0
+		if sent > 0 {
+			loss = float64(lost) / float64(sent) * 100
+		}
+		stats = append(stats, latencyStat{
+			tag:    pt.Tag,
+			avgRTT: avg.Float64,
+			minRTT: min.Float64,
+			loss:   loss,
+			ok:     avg.Valid, // 全丢包时 AVG(rtt_ms) 为 NULL
+		})
+	}
+	return stats
+}
+
+// latencySection 拼装「网络延迟」小节；无目标或全部无数据时返回空串（不加空白小节）。
+func (n *Notifier) latencySection(startTs, endTs int64) string {
+	stats := n.dailyLatency(startTs, endTs)
+	if len(stats) == 0 {
+		return ""
+	}
+	hasData := false
+	width := 0 // 目标名对齐宽度（CJK 记 2）
+	for _, s := range stats {
+		if s.ok {
+			hasData = true
+		}
+		if w := displayWidth(s.tag); w > width {
+			width = w
+		}
+	}
+	if !hasData {
+		return ""
+	}
+
+	sec := "\n\n网络延迟"
+	for _, s := range stats {
+		name := s.tag + spaces(width-displayWidth(s.tag))
+		if !s.ok {
+			sec += fmt.Sprintf("\n  %s  无数据", name)
+			continue
+		}
+		lossText := fmt.Sprintf("丢%.0f%%", s.loss)
+		if s.loss > 0 {
+			lossText += " ⚠️"
+		}
+		sec += fmt.Sprintf("\n  %s  %.1fms（最低 %.1f）%s", name, s.avgRTT, s.minRTT, lossText)
+	}
+	return sec
+}
+
+// displayWidth 估算字符串显示宽度：CJK 及全角字符记 2，其余记 1，用于纯文本列对齐。
+func displayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		if r >= 0x1100 && (r <= 0x115F || // Hangul Jamo
+			(r >= 0x2E80 && r <= 0xA4CF) || // CJK 及部首
+			(r >= 0xAC00 && r <= 0xD7A3) || // Hangul 音节
+			(r >= 0xF900 && r <= 0xFAFF) || // CJK 兼容
+			(r >= 0xFF00 && r <= 0xFF60) || // 全角
+			(r >= 0xFFE0 && r <= 0xFFE6)) {
+			w += 2
+		} else {
+			w++
+		}
+	}
+	return w
+}
+
+// spaces 返回 n 个空格（n<=0 时为空串）。
+func spaces(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat(" ", n)
 }
 
 // dailyTotal 读取某天 total 网卡的上/下行字节，无记录时返回 0。
