@@ -220,21 +220,20 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 		return ""
 	}
 
-	rows := make([][2]string, 0, len(stats))
+	lines := make([]string, 0, len(stats))
 	for _, s := range stats {
+		tag := esc(s.tag)
 		if !s.ok {
-			rows = append(rows, [2]string{esc(s.tag), "无数据"})
+			lines = append(lines, fmt.Sprintf("<b>%s</b>  无数据", tag))
 			continue
 		}
-		lossText := fmt.Sprintf("丢%.0f%%", s.loss)
-		rows = append(rows, [2]string{
-			esc(s.tag),
-			// 尾部留白：Telegram 会在 <pre> 块右上角叠一个复制按钮，单行数据时会遮住行尾
-			// （如「丢0%」被截成「丢0」）。补几个空格撑宽代码块，让文字与按钮错开。
-			fmt.Sprintf("%.1fms  最低 %.1f  %s    ", s.avgRTT, s.minRTT, lossText),
-		})
+		lines = append(lines, fmt.Sprintf("<b>%s</b>  %.1fms · 最低 %.1f · 丢%.0f%%",
+			tag, s.avgRTT, s.minRTT, s.loss))
 	}
-	return "\n\n<b>网络延迟</b>\n<pre>" + alignRows(rows) + "</pre>"
+	// 不用 <pre> 等宽块：Telegram 会在代码块右上角叠一个复制按钮，遮住首行行尾；延迟小节
+	// 常只有一行（首行即最宽行）必被遮挡，且行尾补空格会被客户端 trim 掉无效。改用加粗
+	// 标签的普通富文本行（无复制按钮），数值以 · 分隔避免 HTML 连续空格被折叠。
+	return "\n\n<b>网络延迟</b>\n" + strings.Join(lines, "\n")
 }
 
 // displayWidth 估算字符串显示宽度：CJK 及全角字符记 2，其余记 1，用于纯文本列对齐。

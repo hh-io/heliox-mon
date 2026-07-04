@@ -127,9 +127,9 @@ func TestDailyLatency(t *testing.T) {
 		t.Errorf("bad 目标 stats=%+v，期望 ok=false loss=100", stats[1])
 	}
 
-	// 小节应为 HTML 富文本：含加粗标题、<pre> 等宽块、ms 单位、无数据标记，且 Tag 已转义
+	// 小节应为 HTML 富文本：含加粗标题、加粗目标标签、ms 单位、无数据标记，且 Tag 已转义
 	sec := n.latencySection(start, end)
-	for _, want := range []string{"<b>网络延迟</b>", "<pre>", "</pre>", "ms", "无数据", "A&amp;B"} {
+	for _, want := range []string{"<b>网络延迟</b>", "ms", "无数据", "<b>A&amp;B</b>"} {
 		if !strings.Contains(sec, want) {
 			t.Errorf("小节缺少 %q：\n%s", want, sec)
 		}
