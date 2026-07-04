@@ -111,7 +111,7 @@ func (n *Notifier) SendDailyReport() error {
 	projected := dailyAvg * int64(totalDays)
 
 	// 标题 + 昨日用量（数据行放 <pre> 等宽块，emoji 仅在加粗标题里）
-	msg := fmt.Sprintf("<b>📊 每日流量报告 · %s</b>\n%s（%s）\n\n<b>昨日用量</b>\n<pre>%s</pre>",
+	msg := fmt.Sprintf("<b>每日流量报告 · %s</b>\n%s（%s）\n\n<b>昨日用量</b>\n<pre>%s</pre>",
 		esc(n.cfg.ServerName),
 		yesterday, weekdayCN(yTime),
 		alignRows([][2]string{
@@ -235,7 +235,7 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 			fmt.Sprintf("%.1fms  最低 %.1f  %s", s.avgRTT, s.minRTT, lossText),
 		})
 	}
-	return "\n\n<b>🌐 网络延迟</b>\n<pre>" + alignRows(rows) + "</pre>"
+	return "\n\n<b>网络延迟</b>\n<pre>" + alignRows(rows) + "</pre>"
 }
 
 // displayWidth 估算字符串显示宽度：CJK 及全角字符记 2，其余记 1，用于纯文本列对齐。
