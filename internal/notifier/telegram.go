@@ -220,7 +220,12 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 		return ""
 	}
 
-	rows := make([][2]string, 0, len(stats))
+	rows := make([][2]string, 0, len(stats)+1)
+	// 首行放实际采样时段：Telegram 会在 <pre> 块右上角叠复制按钮遮住首行行尾，让这行说明
+	// 文字去“挡枪”，下方真实延迟数据便不会被遮（与该行长短无关，按钮只蹭右上角一行）。
+	if win := n.latencyWindow(startTs, endTs); win != "" {
+		rows = append(rows, [2]string{"采样", win})
+	}
 	for _, s := range stats {
 		if !s.ok {
 			rows = append(rows, [2]string{esc(s.tag), "无数据"})
@@ -231,12 +236,26 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 			fmt.Sprintf("%.1fms  最低 %.1f  丢%.0f%%", s.avgRTT, s.minRTT, s.loss),
 		})
 	}
-	// Telegram 在 <pre> 块右上角叠一个复制按钮，遮住首行行尾（延迟小节常只有一行，首行
-	// 即最宽行，「丢0%」会被截成「丢0」）；而行尾补空格会被客户端 trim 掉无效。给首行末尾
-	// 追加「空格 + 点号」锚点：点号非空格、不会被 trim，正好落在按钮下被遮住，从而把真实
-	// 数据顶出遮挡区。
-	rows[0][1] += " ."
 	return "\n\n<b>网络延迟</b>\n<pre>" + alignRows(rows) + "</pre>"
+}
+
+// latencyWindow 返回 [startTs, endTs) 内延迟记录的实际采样时段（本地时区 HH:MM–HH:MM）；
+// 无记录时返回空串。窗口取全体探测目标的最早/最晚采样时刻，反映探测中途启动的真实覆盖。
+func (n *Notifier) latencyWindow(startTs, endTs int64) string {
+	var minTs, maxTs sql.NullInt64
+	if err := n.db.QueryRow(
+		"SELECT MIN(ts), MAX(ts) FROM latency_records WHERE ts >= ? AND ts < ?",
+		startTs, endTs,
+	).Scan(&minTs, &maxTs); err != nil && err != sql.ErrNoRows {
+		log.Printf("查询延迟采样时段失败: %v", err)
+		return ""
+	}
+	if !minTs.Valid || !maxTs.Valid {
+		return ""
+	}
+	tz := n.cfg.Timezone
+	return time.Unix(minTs.Int64, 0).In(tz).Format("15:04") + "–" +
+		time.Unix(maxTs.Int64, 0).In(tz).Format("15:04")
 }
 
 // displayWidth 估算字符串显示宽度：CJK 及全角字符记 2，其余记 1，用于纯文本列对齐。

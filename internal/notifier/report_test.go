@@ -110,10 +110,13 @@ func TestDailyLatency(t *testing.T) {
 	// bad: 全丢包，rtt/min 为 NULL，sent=5 lost=5
 	insertLatencyNull(t, db, "2.2.2.2", 1300, 5, 5)
 
-	cfg := &config.Config{PingTargets: []config.PingTarget{
-		{Tag: "A&B", IP: "1.1.1.1"}, // 含 HTML 元字符，验证转义
-		{Tag: "Bad", IP: "2.2.2.2"},
-	}}
+	cfg := &config.Config{
+		Timezone: time.UTC, // latencyWindow 需要非 nil 时区
+		PingTargets: []config.PingTarget{
+			{Tag: "A&B", IP: "1.1.1.1"}, // 含 HTML 元字符，验证转义
+			{Tag: "Bad", IP: "2.2.2.2"},
+		},
+	}
 	n := New(cfg, db)
 
 	stats := n.dailyLatency(start, end)
