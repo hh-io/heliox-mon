@@ -1989,7 +1989,14 @@ function setupNotifyPill() {
     if (e.key === "Escape" && !pop.hidden) setOpen(false);
   });
 
-  const btn = document.getElementById("notify-test-btn");
+  wireNotifyButton("notify-test-btn", "/api/notify/test", result);
+  wireNotifyButton("notify-daily-btn", "/api/notify/daily-report", result);
+}
+
+// wireNotifyButton 给弹层内按钮绑定「点击 -> POST 触发发送 -> 回显结果」逻辑，
+// 发送期间禁用按钮避免重复点击；成功/失败都把后端 message 回显到共享结果区。
+function wireNotifyButton(btnId, url, result) {
+  const btn = document.getElementById(btnId);
   if (!btn) return;
   btn.addEventListener("click", async () => {
     btn.disabled = true;
@@ -2000,7 +2007,7 @@ function setupNotifyPill() {
       result.className = "notify-result";
     }
     try {
-      const res = await fetch("/api/notify/test", { method: "POST" });
+      const res = await fetch(url, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (result) {
         result.textContent = data.message || (res.ok ? "已发送" : "发送失败");

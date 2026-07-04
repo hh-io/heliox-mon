@@ -47,9 +47,10 @@ type RealtimeDataProvider interface {
 	GetRealtimeSpeed() (txSpeed, rxSpeed float64, ts int64)
 }
 
-// Notifier 通知发送接口（用于页面「测试发送」验证配置）
+// Notifier 通知发送接口（用于页面「测试发送」/「日报预览」手动触发）
 type Notifier interface {
 	SendTest() error
+	SendDailyReport() error
 }
 
 // NewServer 创建服务器
@@ -79,6 +80,7 @@ func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeData
 	mux.HandleFunc("/api/latency", s.auth(s.handleLatency))
 	mux.HandleFunc("/api/config", s.auth(s.handleConfig))
 	mux.HandleFunc("/api/notify/test", s.auth(s.handleNotifyTest))
+	mux.HandleFunc("/api/notify/daily-report", s.auth(s.handleNotifyDailyReport))
 
 	// 静态文件 (Auth with exceptions)
 	mux.HandleFunc("/", s.auth(s.handleStatic))
@@ -1018,6 +1020,26 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleNotifyTest 发送一条测试通知，用于在页面上验证 Telegram 是否配置成功
 func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
+	s.notifySend(w, r, func() error { return s.notifier.SendTest() }, "测试消息已发送，请检查 Telegram")
+}
+
+// handleNotifyDailyReport 手动触发一次每日报告，便于在页面预览真实格式与内容。
+// 不影响自动调度：日报调度是纯内存定时器，本次发送不写「已发送」标记。
+func (s *Server) handleNotifyDailyReport(w http.ResponseWriter, r *http.Request) {
+	// SendDailyReport 在未配置时静默返回 nil（调度器不想报错刷屏），此处手动触发需
+	// 如实回显「未配置」，否则会假报「已发送」。
+	send := func() error { return s.notifier.SendDailyReport() }
+	if s.cfg.TelegramBotToken == "" || s.cfg.TelegramChatID == "" {
+		send = func() error {
+			return fmt.Errorf("未配置 Telegram（TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID）")
+		}
+	}
+	s.notifySend(w, r, send, "日报已发送，请检查 Telegram")
+}
+
+// notifySend 统一处理页面手动触发发送：校验方法/通知器，执行发送并回显结果。
+// send 用闭包延迟到通知器非空校验之后再取方法值，避免 nil 接口取方法值 panic。
+func (s *Server) notifySend(w http.ResponseWriter, r *http.Request, send func() error, okMsg string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1029,7 +1051,7 @@ func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.notifier.SendTest(); err != nil {
+	if err := send(); err != nil {
 		// 未配置或 Telegram API 报错都回显具体原因，便于排查
 		writeJSONStatus(w, http.StatusBadGateway, map[string]interface{}{
 			"ok": false, "message": err.Error(),
@@ -1037,7 +1059,7 @@ func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, map[string]interface{}{"ok": true, "message": "测试消息已发送，请检查 Telegram"})
+	writeJSON(w, map[string]interface{}{"ok": true, "message": okMsg})
 }
 
 // handleStatic 静态文件服务（使用嵌入文件）
