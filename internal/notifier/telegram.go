@@ -227,12 +227,11 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 			continue
 		}
 		lossText := fmt.Sprintf("丢%.0f%%", s.loss)
-		if s.loss > 0 {
-			lossText += " ⚠️"
-		}
 		rows = append(rows, [2]string{
 			esc(s.tag),
-			fmt.Sprintf("%.1fms  最低 %.1f  %s", s.avgRTT, s.minRTT, lossText),
+			// 尾部留白：Telegram 会在 <pre> 块右上角叠一个复制按钮，单行数据时会遮住行尾
+			// （如「丢0%」被截成「丢0」）。补几个空格撑宽代码块，让文字与按钮错开。
+			fmt.Sprintf("%.1fms  最低 %.1f  %s    ", s.avgRTT, s.minRTT, lossText),
 		})
 	}
 	return "\n\n<b>网络延迟</b>\n<pre>" + alignRows(rows) + "</pre>"
