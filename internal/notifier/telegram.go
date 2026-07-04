@@ -220,20 +220,23 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 		return ""
 	}
 
-	lines := make([]string, 0, len(stats))
+	rows := make([][2]string, 0, len(stats))
 	for _, s := range stats {
-		tag := esc(s.tag)
 		if !s.ok {
-			lines = append(lines, fmt.Sprintf("<b>%s</b>  无数据", tag))
+			rows = append(rows, [2]string{esc(s.tag), "无数据"})
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("<b>%s</b>  %.1fms · 最低 %.1f · 丢%.0f%%",
-			tag, s.avgRTT, s.minRTT, s.loss))
+		rows = append(rows, [2]string{
+			esc(s.tag),
+			fmt.Sprintf("%.1fms  最低 %.1f  丢%.0f%%", s.avgRTT, s.minRTT, s.loss),
+		})
 	}
-	// 不用 <pre> 等宽块：Telegram 会在代码块右上角叠一个复制按钮，遮住首行行尾；延迟小节
-	// 常只有一行（首行即最宽行）必被遮挡，且行尾补空格会被客户端 trim 掉无效。改用加粗
-	// 标签的普通富文本行（无复制按钮），数值以 · 分隔避免 HTML 连续空格被折叠。
-	return "\n\n<b>网络延迟</b>\n" + strings.Join(lines, "\n")
+	// Telegram 在 <pre> 块右上角叠一个复制按钮，遮住首行行尾（延迟小节常只有一行，首行
+	// 即最宽行，「丢0%」会被截成「丢0」）；而行尾补空格会被客户端 trim 掉无效。给首行末尾
+	// 追加「空格 + 连字符」锚点：连字符非空格、不会被 trim，正好落在按钮下被遮住，从而把
+	// 真实数据顶出遮挡区。
+	rows[0][1] += "   -"
+	return "\n\n<b>网络延迟</b>\n<pre>" + alignRows(rows) + "</pre>"
 }
 
 // displayWidth 估算字符串显示宽度：CJK 及全角字符记 2，其余记 1，用于纯文本列对齐。
