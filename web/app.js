@@ -823,15 +823,29 @@ function renderLatencyChart() {
     ? "rgba(104, 180, 140, 0.45)"
     : "rgba(104, 180, 140, 0.5)"; // 柔和绿 - 最低值
 
+  // 无数据缺口：相邻点间隔超过 1.5 倍粒度视为监控停采（如服务器重启）
+  const gapStepMs = Math.max(1, latencyData.granularity || 1) * 60000;
+  const gapThresholdMs = gapStepMs * 1.5;
+
   const series = latencyData.targets
     .map((target, idx) => {
       if (!activeTags.has(target.tag)) return null;
       const color = latencyColors[idx % latencyColors.length];
       const points = target.points || [];
-      const data = points.map((p) => [
-        p.ts * 1000,
-        p.rtt_ms === null || p.rtt_ms === undefined ? null : p.rtt_ms,
-      ]);
+      // 缺口处插入 null 点让折线断开，避免直线跨越无数据时段造成误导
+      const data = [];
+      let prevTs = null;
+      points.forEach((p) => {
+        const ts = p.ts * 1000;
+        if (prevTs !== null && ts - prevTs > gapThresholdMs) {
+          data.push({ value: [prevTs + gapStepMs, null], isGap: true });
+        }
+        data.push([
+          ts,
+          p.rtt_ms === null || p.rtt_ms === undefined ? null : p.rtt_ms,
+        ]);
+        prevTs = ts;
+      });
       const stats = target.stats || {};
       const avg = stats.avg ?? 0;
 
@@ -901,6 +915,30 @@ function renderLatencyChart() {
     })
     .filter(Boolean);
 
+  // 灰色区域标注无数据缺口；挂在第一个目标序列上即可全图显示
+  const gapAreas = buildGapMarkAreas(
+    latencyData.targets,
+    gapStepMs,
+    gapThresholdMs,
+  );
+  if (series.length && gapAreas.length) {
+    series[0].markArea = {
+      silent: true,
+      itemStyle: {
+        color: isLight
+          ? "rgba(100, 116, 139, 0.10)"
+          : "rgba(148, 163, 184, 0.08)",
+      },
+      label: {
+        show: true,
+        position: "insideTop",
+        color: mutedColor,
+        fontSize: 10,
+      },
+      data: gapAreas,
+    };
+  }
+
   latencyLossSeries = buildLossSeries(latencyData.targets);
   if (showLoss && latencyLossSeries.length) {
     series.push({
@@ -909,7 +947,9 @@ function renderLatencyChart() {
       yAxisIndex: 1,
       smooth: true,
       showSymbol: false,
-      data: latencyLossSeries.map((p) => [p.ts, p.loss]),
+      data: latencyLossSeries.map((p) =>
+        p.gap ? { value: [p.ts, null], isGap: true } : [p.ts, p.loss],
+      ),
       itemStyle: { color: latencyLossColor.border },
       lineStyle: { color: latencyLossColor.border, width: 1.5 },
       areaStyle: { color: latencyLossColor.bg },
@@ -940,9 +980,12 @@ function renderLatencyChart() {
         const rows = params
           .map((p) => {
             const value = Array.isArray(p.value) ? p.value[1] : p.value;
+            const isGap = p.data && !Array.isArray(p.data) && p.data.isGap;
             const text =
               value === null || value === undefined
-                ? "丢包"
+                ? isGap
+                  ? "无数据"
+                  : "丢包"
                 : p.seriesName === "丢包率"
                   ? `${Number(value).toFixed(1)}%`
                   : `${Number(value).toFixed(1)} ms`;
@@ -1134,7 +1177,8 @@ function getLatencyRange(series) {
   let max = -Infinity;
   series.forEach((s) => {
     (s.data || []).forEach((point) => {
-      const ts = point[0];
+      const ts = Array.isArray(point) ? point[0] : point.value?.[0];
+      if (ts === undefined) return;
       if (ts < min) min = ts;
       if (ts > max) max = ts;
     });
@@ -1165,7 +1209,37 @@ function buildLossSeries(targets) {
     }))
     .sort((a, b) => a.ts - b.ts);
 
-  return points;
+  // 缺口处插入 null 断点，同时避免缺口前的高丢包点把整段缺口计入异常时长
+  const stepMs = Math.max(1, latencyData?.granularity || 1) * 60000;
+  const thresholdMs = stepMs * 1.5;
+  const filled = [];
+  points.forEach((p) => {
+    const prev = filled.length ? filled[filled.length - 1] : null;
+    if (prev && p.ts - prev.ts > thresholdMs) {
+      filled.push({ ts: prev.ts + stepMs, loss: null, gap: true });
+    }
+    filled.push(p);
+  });
+  return filled;
+}
+
+// 合并所有目标的时间线找无数据缺口（采集器停采对所有目标同时生效）
+function buildGapMarkAreas(targets, stepMs, thresholdMs) {
+  const tsSet = new Set();
+  targets.forEach((t) => {
+    (t.points || []).forEach((p) => tsSet.add(p.ts * 1000));
+  });
+  const tsList = Array.from(tsSet).sort((a, b) => a - b);
+  const areas = [];
+  for (let i = 1; i < tsList.length; i++) {
+    if (tsList[i] - tsList[i - 1] > thresholdMs) {
+      areas.push([
+        { xAxis: tsList[i - 1] + stepMs, name: "无数据" },
+        { xAxis: tsList[i] },
+      ]);
+    }
+  }
+  return areas;
 }
 
 function buildLossMarkAreas(points, threshold) {
