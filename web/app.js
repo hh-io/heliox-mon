@@ -823,9 +823,12 @@ function renderLatencyChart() {
     ? "rgba(104, 180, 140, 0.45)"
     : "rgba(104, 180, 140, 0.5)"; // 柔和绿 - 最低值
 
-  // 无数据缺口：相邻点间隔超过 1.5 倍粒度视为监控停采（如服务器重启）
+  // 无数据缺口判定：间隔超过「一个粒度桶 + 90s 余量」才算停采。
+  // 余量用于吸收采集节奏漂移导致的单桶假空洞（采样未对齐整分钟，偶尔某分钟落 0
+  // 个样本但 ping 并未真丢）；细粒度下需连续缺 ≥2 分钟才标灰，粗粒度下真实的多分
+  // 钟中断仍照常显示。
   const gapStepMs = Math.max(1, latencyData.granularity || 1) * 60000;
-  const gapThresholdMs = gapStepMs * 1.5;
+  const gapThresholdMs = gapStepMs + 90000;
 
   const series = latencyData.targets
     .map((target, idx) => {
@@ -1205,9 +1208,10 @@ function buildLossSeries(targets) {
     }))
     .sort((a, b) => a.ts - b.ts);
 
-  // 缺口处插入 null 断点，同时避免缺口前的高丢包点把整段缺口计入异常时长
+  // 缺口处插入 null 断点，同时避免缺口前的高丢包点把整段缺口计入异常时长。
+  // 阈值须与折线一致（一个粒度桶 + 90s 余量），避免丢包序列与延迟曲线断点不一致
   const stepMs = Math.max(1, latencyData?.granularity || 1) * 60000;
-  const thresholdMs = stepMs * 1.5;
+  const thresholdMs = stepMs + 90000;
   const filled = [];
   points.forEach((p) => {
     const prev = filled.length ? filled[filled.length - 1] : null;
