@@ -916,11 +916,7 @@ function renderLatencyChart() {
     .filter(Boolean);
 
   // 灰色区域标注无数据缺口；挂在第一个目标序列上即可全图显示
-  const gapAreas = buildGapMarkAreas(
-    latencyData.targets,
-    gapStepMs,
-    gapThresholdMs,
-  );
+  const gapAreas = buildGapMarkAreas(latencyData.targets, gapThresholdMs);
   if (series.length && gapAreas.length) {
     series[0].markArea = {
       silent: true,
@@ -1224,7 +1220,7 @@ function buildLossSeries(targets) {
 }
 
 // 合并所有目标的时间线找无数据缺口（采集器停采对所有目标同时生效）
-function buildGapMarkAreas(targets, stepMs, thresholdMs) {
+function buildGapMarkAreas(targets, thresholdMs) {
   const tsSet = new Set();
   targets.forEach((t) => {
     (t.points || []).forEach((p) => tsSet.add(p.ts * 1000));
@@ -1233,8 +1229,9 @@ function buildGapMarkAreas(targets, stepMs, thresholdMs) {
   const areas = [];
   for (let i = 1; i < tsList.length; i++) {
     if (tsList[i] - tsList[i - 1] > thresholdMs) {
+      // 灰色区域两端贴齐相邻真实数据点，完整覆盖缺口（不再往内缩一格）
       areas.push([
-        { xAxis: tsList[i - 1] + stepMs, name: "无数据" },
+        { xAxis: tsList[i - 1], name: "无数据" },
         { xAxis: tsList[i] },
       ]);
     }
