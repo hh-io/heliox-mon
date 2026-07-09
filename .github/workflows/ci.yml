@@ -23,6 +23,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          check-latest: true
       # 用 runner 的 Go 工具链自行编译 golangci-lint，
       # 避免官方预编译二进制（go1.24 构建）因低于 go.mod 目标版本(1.25)而拒绝运行
       - name: Install golangci-lint
@@ -38,6 +39,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          check-latest: true
       - name: go vet
         run: go vet ./...
       - name: go test
@@ -60,6 +62,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          check-latest: true
       - name: Build
         env:
           CGO_ENABLED: 0
@@ -75,6 +78,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          check-latest: true
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest

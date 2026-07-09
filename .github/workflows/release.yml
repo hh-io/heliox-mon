@@ -28,6 +28,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          check-latest: true
 
       # 复用 Makefile release 目标，与本地手动发布产物完全一致（含 -X main.Version 版本注入）
       - name: Build release binaries
