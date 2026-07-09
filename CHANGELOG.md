@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-09
+
 ### 新增
 
 - 客户端延迟上报：新增 `POST /api/latency/report`（独立 `HELIOX_MON_REPORT_TOKEN`
