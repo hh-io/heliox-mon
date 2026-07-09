@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,9 @@ func NewServer(cfg *config.Config, db *storage.DB, realtimeProvider RealtimeData
 	mux.HandleFunc("/api/traffic/realtime", s.auth(s.handleTrafficRealtime))
 	mux.HandleFunc("/api/traffic/ports", s.auth(s.handlePortTraffic))
 	mux.HandleFunc("/api/latency", s.auth(s.handleLatency))
+	// 客户端测延与上报：echo 免认证，report 走独立 Bearer token（见各自 handler）
+	mux.HandleFunc("/api/echo", handleEcho)
+	mux.HandleFunc("/api/latency/report", s.handleLatencyReport)
 	mux.HandleFunc("/api/config", s.auth(s.handleConfig))
 	mux.HandleFunc("/api/notify/test", s.auth(s.handleNotifyTest))
 	mux.HandleFunc("/api/notify/daily-report", s.auth(s.handleNotifyDailyReport))
@@ -736,7 +740,29 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 		"granularity": granularityMinutes,
 	}
 
-	for _, pt := range s.cfg.PingTargets {
+	// 目标列表 = 配置的 ping 目标 + 查询窗口内出现过的客户端上报目标（client:*）。
+	// 客户端目标动态发现，无需配置即可在图表出现；ORDER BY 保证颜色分配稳定。
+	targets := make([]config.PingTarget, 0, len(s.cfg.PingTargets))
+	targets = append(targets, s.cfg.PingTargets...)
+	if clientRows, err := s.db.Query(`
+		SELECT DISTINCT target FROM latency_records
+		WHERE target LIKE 'client:%' AND ts >= ? AND ts <= ?
+		ORDER BY target
+	`, startTs, endTs); err != nil {
+		log.Printf("查询客户端延迟目标失败: %v", err)
+	} else {
+		for clientRows.Next() {
+			var t string
+			if err := clientRows.Scan(&t); err != nil {
+				log.Printf("扫描客户端延迟目标失败: %v", err)
+				continue
+			}
+			targets = append(targets, config.PingTarget{Tag: strings.TrimPrefix(t, "client:"), IP: t})
+		}
+		clientRows.Close()
+	}
+
+	for _, pt := range targets {
 		// 按粒度聚合查询：按时间桶分组，计算平均 RTT
 		rows, err := s.db.Query(`
 			SELECT (ts / ?) * ? as bucket_ts,
@@ -880,6 +906,165 @@ func chooseLatencyGranularity(duration time.Duration) int {
 	}
 
 	return raw
+}
+
+// handleEcho 客户端测延用的极简回显端点：免认证、不写库、不打日志，
+// 保证服务端耗时相对毫秒级网络 RTT 可忽略（微秒级）。
+// 客户端在同一 keep-alive 连接上串行请求多次、取 min 即为端到端净 RTT。
+func handleEcho(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// clientNameRe 限制客户端名为字母/数字/下划线/连字符，长度 1-32，
+// 既防注入又保证 target = "client:<name>" 不与 IP 目标冲突。
+var clientNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+
+// latencySample 单条客户端上报样本。RTT 类字段用指针区分「无数据」与 0ms。
+type latencySample struct {
+	TS     *int64   `json:"ts"`
+	RttMs  *float64 `json:"rtt_ms"`
+	MinRtt *float64 `json:"min_rtt"`
+	Mdev   *float64 `json:"mdev"`
+	Sent   int      `json:"sent"`
+	Lost   int      `json:"lost"`
+}
+
+// handleLatencyReport 接收客户端主动上报的延迟样本，写入 latency_records，
+// 完全复用现有存储/降采样/前端图表（target 用 "client:<name>" 命名空间前缀）。
+// 独立 Bearer token 认证，与管理员密码隔离：泄露仅能写入伪造延迟数据，无法读数据或登录。
+func (s *Server) handleLatencyReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 未配置上报令牌 = 功能未启用，直接拒绝（而非放行匿名写入）
+	if s.cfg.ReportToken == "" {
+		writeJSONStatus(w, http.StatusForbidden, map[string]interface{}{
+			"ok": false, "message": "上报功能未启用",
+		})
+		return
+	}
+
+	// Bearer token 常量时间比较，防时序攻击（与 checkCredentials 同风格）
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.ReportToken)) != 1 {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]interface{}{
+			"ok": false, "message": "无效的上报令牌",
+		})
+		return
+	}
+
+	// 限制请求体大小，防止恶意超大 body
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+
+	var req struct {
+		Client  string          `json:"client"`
+		Samples []latencySample `json:"samples"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]interface{}{
+			"ok": false, "message": "请求体解析失败: " + err.Error(),
+		})
+		return
+	}
+
+	if !clientNameRe.MatchString(req.Client) {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]interface{}{
+			"ok": false, "message": "client 名非法（仅允许字母/数字/下划线/连字符，长度 1-32）",
+		})
+		return
+	}
+	if len(req.Samples) < 1 || len(req.Samples) > 100 {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]interface{}{
+			"ok": false, "message": "samples 数量须在 1-100 之间",
+		})
+		return
+	}
+
+	now := time.Now().Unix()
+	// 校验每条样本，任一非法即整体拒绝并回显原因（不静默丢弃）
+	for i := range req.Samples {
+		if msg := validateLatencySample(&req.Samples[i], now); msg != "" {
+			writeJSONStatus(w, http.StatusBadRequest, map[string]interface{}{
+				"ok": false, "message": fmt.Sprintf("样本[%d] %s", i, msg),
+			})
+			return
+		}
+	}
+
+	target := "client:" + req.Client
+	tx, err := s.db.Begin()
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]interface{}{
+			"ok": false, "message": "数据库事务开启失败",
+		})
+		return
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO latency_records (ts, target, rtt_ms, min_rtt, mdev, sent, lost, is_aggregated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+	)
+	if err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			log.Printf("回滚上报事务失败: %v", rbErr)
+		}
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]interface{}{
+			"ok": false, "message": "数据库预处理失败",
+		})
+		return
+	}
+	defer stmt.Close()
+
+	for i := range req.Samples {
+		smp := &req.Samples[i]
+		ts := now
+		if smp.TS != nil {
+			ts = *smp.TS
+		}
+		if _, err := stmt.Exec(ts, target, smp.RttMs, smp.MinRtt, smp.Mdev, smp.Sent, smp.Lost); err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Printf("回滚上报事务失败: %v", rbErr)
+			}
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]interface{}{
+				"ok": false, "message": "写入延迟记录失败",
+			})
+			return
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]interface{}{
+			"ok": false, "message": "提交上报事务失败",
+		})
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{"ok": true, "accepted": len(req.Samples)})
+}
+
+// validateLatencySample 校验单条上报样本，返回空字符串表示合法，否则为错误描述。
+func validateLatencySample(smp *latencySample, now int64) string {
+	// ts 若提供须落在 [now-24h, now+5min]，防时钟错乱污染图表
+	if smp.TS != nil {
+		if *smp.TS < now-24*3600 || *smp.TS > now+300 {
+			return "ts 超出允许时间窗（now-24h ~ now+5min）"
+		}
+	}
+	// RTT 类字段：null 或 [0, 60000) 毫秒
+	for _, v := range []*float64{smp.RttMs, smp.MinRtt, smp.Mdev} {
+		if v != nil && (*v < 0 || *v >= 60000) {
+			return "rtt/min_rtt/mdev 须为 null 或 [0,60000) 毫秒"
+		}
+	}
+	if smp.Sent < 1 || smp.Sent > 1000 {
+		return "sent 须在 1-1000 之间"
+	}
+	if smp.Lost < 0 || smp.Lost > smp.Sent {
+		return "lost 须在 0-sent 之间"
+	}
+	return ""
 }
 
 // handlePortTraffic 端口流量统计

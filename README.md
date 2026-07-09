@@ -107,6 +107,7 @@ uninstall  # 卸载
 | `PING_COUNT`              | 每次 ping 发包数              | 5                                 |
 | `PING_TIMEOUT_MS`         | 单次 ping 超时(ms)            | 1000                              |
 | `PING_GAP_MS`             | ping 发包间隔(ms)             | 200                               |
+| `HELIOX_MON_REPORT_TOKEN` | 客户端延迟上报令牌            | 空（设置后启用上报接口）          |
 
 ### 计费模式 (BILLING_MODE)
 
@@ -138,6 +139,50 @@ uninstall  # 卸载
 否则静默跳过。推送时刻按定时器对齐，进程重启会重新计算下一次，不会重复推送。
 
 修改后执行 `sudo ./deploy.sh monitor restart` 生效。
+
+---
+
+## 客户端延迟上报（可选）
+
+服务端 `PING_TARGETS` 只能主动探测公网目标，测不了「用户侧到 VPS」这个方向——客户端在
+NAT 后无法被反向探测。开启客户端上报后，客户端周期性测量到 VPS 的端到端 RTT 并推送，
+数据完全复用现有延迟图表，效果等价于在 `PING_TARGETS` 里无缝多了一项（序列名为客户端名）。
+
+### 开启
+
+在 `.env` 设置 `HELIOX_MON_REPORT_TOKEN=<随机串>`（与登录密码分开；泄露仅能写入延迟数据，
+无法读数据或登录），重启生效。留空则上报接口返回 403。
+
+### 两个接口
+
+| 接口 | 认证 | 说明 |
+| ---- | ---- | ---- |
+| `GET /api/echo` | 无 | 极简回显（204，不写库不打日志），供客户端测端到端 TCP RTT |
+| `POST /api/latency/report` | `Authorization: Bearer <token>` | 上报样本，写入延迟库 |
+
+上报请求体：
+
+```json
+{ "client": "home-mac",
+  "samples": [ { "rtt_ms": 45.2, "min_rtt": 42.1, "mdev": 3.4, "sent": 10, "lost": 0 } ] }
+```
+
+`client` 仅允许字母/数字/下划线/连字符（≤32 字符），作为图表序列名，需自行保证各客户端唯一。
+`ts` 可选（Unix 秒，须在 now-24h ~ now+5min 内），缺省用服务端当前时间。
+
+### 客户端脚本
+
+仓库 `scripts/latency-client.sh`（依赖 bash/curl/awk）已实现「预热丢弃握手 → keep-alive
+串行测 N 次 → 取 min/avg/stddev → 上报」，配 cron/launchd 每 60s 一轮即可：
+
+```bash
+MON_URL=http://<vps-ip>:9100 CLIENT_NAME=home-mac REPORT_TOKEN=xxx ./latency-client.sh
+```
+
+> ⚠️ **必须直连 VPS，不能用 Cloudflare Tunnel 域名。** 经 Tunnel 测得的是「客户端→CF
+> 边缘」的 RTT（anycast 就近接入，数值漂亮但无意义），非到 VPS 的端到端延迟。这需要把
+> `HELIOX_MON_LISTEN` 放开到 `0.0.0.0:9100` 或加防火墙放行；不愿暴露端口者可退化为客户端
+> 自行 `ping <vps-ip>` 后仅调用上报接口，echo 是可选增强。
 
 ---
 

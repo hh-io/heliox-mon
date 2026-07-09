@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 客户端延迟上报：新增 `POST /api/latency/report`（独立 `HELIOX_MON_REPORT_TOKEN`
+  Bearer 认证，与登录密码隔离），客户端可上报到 VPS 的端到端 RTT。数据以
+  `client:<name>` 命名空间写入现有 `latency_records`，完全复用降采样、保留策略与前端
+  图表，效果等价于在 `PING_TARGETS` 无缝多一项。附参考客户端 `scripts/latency-client.sh`。
+- 高精度测延端点 `GET /api/echo`：免认证、不写库、不打日志的 204 回显，供客户端在
+  keep-alive 连接上测量端到端 TCP 净 RTT，排除服务端业务耗时干扰。
+
 ## [0.16.1] - 2026-07-09
 
 ### 修复

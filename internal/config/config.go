@@ -69,6 +69,9 @@ type Config struct {
 
 	// 安全
 	TurnstileSecretKey string
+
+	// 客户端延迟上报令牌（空则关闭上报功能）
+	ReportToken string
 }
 
 // Load 加载配置
@@ -91,6 +94,7 @@ func Load() (*Config, error) {
 		PingTimeout:        time.Duration(getEnvInt("PING_TIMEOUT_MS", 1000)) * time.Millisecond,
 		PingGap:            time.Duration(getEnvInt("PING_GAP_MS", 200)) * time.Millisecond,
 		TurnstileSecretKey: getEnv("HELIOX_TURNSTILE_SECRET", ""),
+		ReportToken:        getEnv("HELIOX_MON_REPORT_TOKEN", ""),
 	}
 
 	// 解析报警阈值
