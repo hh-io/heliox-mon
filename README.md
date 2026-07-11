@@ -92,7 +92,7 @@ uninstall  # 卸载
 | `HELIOX_MON_LISTEN`       | 监听地址                      | 127.0.0.1:9100                    |
 | `HELIOX_MON_DATA_DIR`     | 数据目录（SQLite）            | /var/lib/heliox-mon               |
 | `SERVER_NAME`             | 服务器标识                    | Heliox（建议设为主机名）          |
-| `HELIOX_MON_TZ`           | 时区                          | Asia/Shanghai                     |
+| `HELIOX_MON_TZ`           | 时区                          | Asia/Singapore                    |
 | `HELIOX_ENV_PATH`         | heliox 的 .env 路径（读端口） | ../heliox/.env                    |
 | `MONTHLY_LIMIT_GB`        | 月流量限额(GB)                | 1000                              |
 | `BILLING_MODE`            | 计费模式                      | bidirectional                     |

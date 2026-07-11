@@ -634,7 +634,11 @@ let filtersInitialized = false;
 const themeStorageKey = "heliox-theme";
 
 function formatDateValue(date) {
-  return date.toISOString().split("T")[0];
+  // 用本地日历日而非 UTC 日历日，避免 UTC+8 等时区凌晨时段"今天"算错一天
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 function setLatencyRecentActive(active) {

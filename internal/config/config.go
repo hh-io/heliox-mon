@@ -117,11 +117,11 @@ func Load() (*Config, error) {
 	}
 
 	// 设置时区
-	tzName := getEnv("HELIOX_MON_TZ", "Asia/Shanghai")
+	tzName := getEnv("HELIOX_MON_TZ", "Asia/Singapore")
 	tz, err := time.LoadLocation(tzName)
 	if err != nil {
 		// 无法加载指定时区，使用固定偏移
-		tz = time.FixedZone("CST", 8*3600)
+		tz = time.FixedZone("+08", 8*3600)
 	}
 	if tz == nil {
 		// 极端情况兜底：使用 UTC
