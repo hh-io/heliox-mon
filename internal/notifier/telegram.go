@@ -43,10 +43,10 @@ func (n *Notifier) SendTrafficAlert(usedGB, limitGB int, percent float64, resetD
 		return nil // 冷却期内
 	}
 
-	// 构造消息（标题加粗，数据放 <pre> 等宽块）
-	msg := fmt.Sprintf("<b>⚠️ 流量预警 · %s</b>\n<pre>%s</pre>\n检测时间 %s",
+	// 构造消息（标题加粗，数据放 <blockquote> 引用块，各端渲染一致）
+	msg := fmt.Sprintf("<b>⚠️ 流量预警 · %s</b>\n<blockquote>%s</blockquote>\n检测时间 %s",
 		esc(n.cfg.ServerName),
-		alignRows([][2]string{
+		joinRows([][2]string{
 			{"当前", fmt.Sprintf("%d GB / %d GB (%.1f%%)", usedGB, limitGB, percent)},
 			{"剩余", fmt.Sprintf("%d GB", limitGB-usedGB)},
 			{"重置", fmt.Sprintf("%s（%d 天后）", resetDate, daysLeft)},
@@ -110,11 +110,12 @@ func (n *Notifier) SendDailyReport() error {
 	dailyAvg := used / int64(elapsedDays)
 	projected := dailyAvg * int64(totalDays)
 
-	// 标题 + 昨日用量（数据行放 <pre> 等宽块，emoji 仅在加粗标题里）
-	msg := fmt.Sprintf("<b>每日流量报告 · %s</b>\n%s（%s）\n\n<b>昨日用量</b>\n<pre>%s</pre>",
+	// 标题 + 昨日用量（每个小节包一个 <blockquote>：iOS/桌面端渲染一致，
+	// 且不像 <pre> 会在 macOS 上出现代码块底色和复制按钮）
+	msg := fmt.Sprintf("<b>每日流量报告 · %s</b>\n%s（%s）\n\n<blockquote><b>昨日用量</b>\n%s</blockquote>",
 		esc(n.cfg.ServerName),
 		yesterday, weekdayCN(yTime),
-		alignRows([][2]string{
+		joinRows([][2]string{
 			{"上行", formatBytes(yTx)},
 			{"下行", formatBytes(yRx)},
 			{"合计", formatBytes(yTotal) + "  环比 " + trendText(yTotal, bTotal)},
@@ -134,9 +135,9 @@ func (n *Notifier) SendDailyReport() error {
 		if projected > limitBytes {
 			projText += " ⚠️ 或超限"
 		}
-		msg += fmt.Sprintf("\n\n<b>本周期用量</b>\n<pre>%s %.1f%%\n%s</pre>",
-			progressBar(percent), percent,
-			alignRows([][2]string{
+		msg += fmt.Sprintf("\n\n<blockquote><b>本周期用量</b>  %.1f%%\n%s\n%s</blockquote>",
+			percent, progressBar(percent),
+			joinRows([][2]string{
 				{"已用", formatBytes(used) + " / " + formatBytes(limitBytes)},
 				{"剩余", formatBytes(remain)},
 				{"日均", formatBytes(dailyAvg) + "  预计 " + projText},
@@ -144,8 +145,8 @@ func (n *Notifier) SendDailyReport() error {
 			}),
 		)
 	} else {
-		msg += fmt.Sprintf("\n\n<b>本周期用量</b>\n<pre>%s</pre>",
-			alignRows([][2]string{
+		msg += fmt.Sprintf("\n\n<blockquote><b>本周期用量</b>\n%s</blockquote>",
+			joinRows([][2]string{
 				{"已用", formatBytes(used)},
 				{"日均", formatBytes(dailyAvg) + "  预计 " + formatBytes(projected)},
 				{"重置", reset},
@@ -220,12 +221,7 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 		return ""
 	}
 
-	rows := make([][2]string, 0, len(stats)+1)
-	// 首行放实际采样时段：Telegram 会在 <pre> 块右上角叠复制按钮遮住首行行尾，让这行说明
-	// 文字去“挡枪”，下方真实延迟数据便不会被遮（与该行长短无关，按钮只蹭右上角一行）。
-	if win := n.latencyWindow(startTs, endTs); win != "" {
-		rows = append(rows, [2]string{"采样", win})
-	}
+	rows := make([][2]string, 0, len(stats))
 	for _, s := range stats {
 		if !s.ok {
 			rows = append(rows, [2]string{esc(s.tag), "无数据"})
@@ -236,7 +232,12 @@ func (n *Notifier) latencySection(startTs, endTs int64) string {
 			fmt.Sprintf("%.1fms  最低 %.1f  丢%.0f%%", s.avgRTT, s.minRTT, s.loss),
 		})
 	}
-	return "\n\n<b>网络延迟</b>\n<pre>" + alignRows(rows) + "</pre>"
+	// 实际采样时段放标题括号里，反映探测中途启动时的真实覆盖窗口
+	title := "<b>网络延迟</b>"
+	if win := n.latencyWindow(startTs, endTs); win != "" {
+		title += "（采样 " + win + "）"
+	}
+	return "\n\n<blockquote expandable>" + title + "\n" + joinRows(rows) + "</blockquote>"
 }
 
 // latencyWindow 返回 [startTs, endTs) 内延迟记录的实际采样时段（本地时区 HH:MM–HH:MM）；
@@ -258,53 +259,20 @@ func (n *Notifier) latencyWindow(startTs, endTs int64) string {
 		time.Unix(maxTs.Int64, 0).In(tz).Format("15:04")
 }
 
-// displayWidth 估算字符串显示宽度：CJK 及全角字符记 2，其余记 1，用于纯文本列对齐。
-func displayWidth(s string) int {
-	w := 0
-	for _, r := range s {
-		if r >= 0x1100 && (r <= 0x115F || // Hangul Jamo
-			(r >= 0x2E80 && r <= 0xA4CF) || // CJK 及部首
-			(r >= 0xAC00 && r <= 0xD7A3) || // Hangul 音节
-			(r >= 0xF900 && r <= 0xFAFF) || // CJK 兼容
-			(r >= 0xFF00 && r <= 0xFF60) || // 全角
-			(r >= 0xFFE0 && r <= 0xFFE6)) {
-			w += 2
-		} else {
-			w++
-		}
-	}
-	return w
-}
-
-// spaces 返回 n 个空格（n<=0 时为空串）。
-func spaces(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.Repeat(" ", n)
-}
-
 // esc 转义 HTML 元字符，供 parse_mode=HTML 下拼入用户可控字符串（服务器名、探测目标 Tag）。
 func esc(s string) string {
 	return html.EscapeString(s)
 }
 
-// alignRows 把 [label, value] 行渲染成等宽块：label 左对齐补到统一宽度，value 为
-// 自由文本紧随其后。用于 <pre> 块内的数据表对齐，宽度按 CJK 感知的 displayWidth 计。
-func alignRows(rows [][2]string) string {
-	labelW := 0
-	for _, r := range rows {
-		if w := displayWidth(r[0]); w > labelW {
-			labelW = w
-		}
-	}
+// joinRows 把 [label, value] 行拼成多行文本，label 与 value 以两个空格分隔。
+// 引用块内是比例字体，不做空格对齐：中文两字标签天然等宽，长短不一的延迟 Tag 对齐也无意义。
+func joinRows(rows [][2]string) string {
 	var b strings.Builder
 	for i, r := range rows {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
 		b.WriteString(r[0])
-		b.WriteString(spaces(labelW - displayWidth(r[0])))
 		b.WriteString("  ")
 		b.WriteString(r[1])
 	}
@@ -344,6 +312,7 @@ func trendText(today, prev int64) string {
 }
 
 // progressBar 用 10 格方块渲染百分比进度条（0-100，超出按满格显示）。
+// 用 ▰▱ 而非 █░：比例字体下前者在 iOS/macOS 客户端渲染都干净。
 func progressBar(percent float64) string {
 	const width = 10
 	filled := int(percent/10 + 0.5)
@@ -356,9 +325,9 @@ func progressBar(percent float64) string {
 	bar := make([]rune, 0, width)
 	for i := 0; i < width; i++ {
 		if i < filled {
-			bar = append(bar, '█')
+			bar = append(bar, '▰')
 		} else {
-			bar = append(bar, '░')
+			bar = append(bar, '▱')
 		}
 	}
 	return string(bar)

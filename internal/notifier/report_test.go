@@ -60,10 +60,10 @@ func TestTrendText(t *testing.T) {
 
 func TestProgressBar(t *testing.T) {
 	cases := map[float64]string{
-		0:   "░░░░░░░░░░",
-		50:  "█████░░░░░",
-		100: "██████████",
-		150: "██████████", // 超限按满格
+		0:   "▱▱▱▱▱▱▱▱▱▱",
+		50:  "▰▰▰▰▰▱▱▱▱▱",
+		100: "▰▰▰▰▰▰▰▰▰▰",
+		150: "▰▰▰▰▰▰▰▰▰▰", // 超限按满格
 	}
 	for in, want := range cases {
 		if got := progressBar(in); got != want {
@@ -77,19 +77,6 @@ func TestWeekdayCN(t *testing.T) {
 	d := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	if got := weekdayCN(d); got != "周三" {
 		t.Errorf("weekdayCN=%q，期望 周三", got)
-	}
-}
-
-func TestDisplayWidth(t *testing.T) {
-	cases := map[string]int{
-		"Google": 6,
-		"电信":     4, // 两个 CJK 字符
-		"CT电信":   6, // ASCII+CJK 混合
-	}
-	for in, want := range cases {
-		if got := displayWidth(in); got != want {
-			t.Errorf("displayWidth(%q)=%d，期望 %d", in, got, want)
-		}
 	}
 }
 
@@ -130,9 +117,9 @@ func TestDailyLatency(t *testing.T) {
 		t.Errorf("bad 目标 stats=%+v，期望 ok=false loss=100", stats[1])
 	}
 
-	// 小节应为 HTML 富文本：含加粗标题、<pre> 等宽块、ms 单位、无数据标记，且 Tag 已转义
+	// 小节应为 HTML 富文本：含加粗标题、可折叠引用块、ms 单位、无数据标记，且 Tag 已转义
 	sec := n.latencySection(start, end)
-	for _, want := range []string{"<b>网络延迟</b>", "<pre>", "</pre>", "ms", "无数据", "A&amp;B"} {
+	for _, want := range []string{"<b>网络延迟</b>", "<blockquote expandable>", "</blockquote>", "ms", "无数据", "A&amp;B"} {
 		if !strings.Contains(sec, want) {
 			t.Errorf("小节缺少 %q：\n%s", want, sec)
 		}
