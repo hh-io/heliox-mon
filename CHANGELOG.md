@@ -217,9 +217,9 @@
 
 - 提升延迟与丢包统计准确性，新增最小 RTT 与抖动（mdev）指标。
 
-[Unreleased]: https://github.com/Theo-oh/heliox-mon/compare/v0.11.0...HEAD
-[0.11.0]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.43...v0.11.0
-[0.10.43]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.42...v0.10.43
-[0.10.42]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.41...v0.10.42
-[0.10.41]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.40...v0.10.41
-[0.10.40]: https://github.com/Theo-oh/heliox-mon/compare/v0.10.39...v0.10.40
+[Unreleased]: https://github.com/hh-io/heliox-mon/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/hh-io/heliox-mon/compare/v0.10.43...v0.11.0
+[0.10.43]: https://github.com/hh-io/heliox-mon/compare/v0.10.42...v0.10.43
+[0.10.42]: https://github.com/hh-io/heliox-mon/compare/v0.10.41...v0.10.42
+[0.10.41]: https://github.com/hh-io/heliox-mon/compare/v0.10.40...v0.10.41
+[0.10.40]: https://github.com/hh-io/heliox-mon/compare/v0.10.39...v0.10.40
