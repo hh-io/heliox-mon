@@ -48,7 +48,16 @@ type Server struct {
 	iptablesMu      sync.Mutex
 	iptablesOK      bool
 	iptablesChecked time.Time
+	iptablesTTL     time.Duration // 本次结论的有效期，见 cachedIptablesOK
 }
+
+// turnstileClient 校验登录人机验证。默认 http.Client 没有整体超时，
+// Cloudflare 一侧不响应时登录请求会一直挂着
+var turnstileClient = &http.Client{Timeout: 10 * time.Second}
+
+// iptablesCmdTimeout 是单条规则检测命令的上限（含 -w 5 的等锁时间）。检测时持有
+// iptablesMu，命令挂住会让所有端口流量请求排队卡死
+const iptablesCmdTimeout = 10 * time.Second
 
 // RealtimeDataProvider 实时数据提供者接口
 type RealtimeDataProvider interface {
@@ -405,7 +414,7 @@ func (s *Server) verifyTurnstile(token string, remoteIP string) bool {
 	formData.Set("response", token)
 	formData.Set("remoteip", host)
 
-	resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", formData)
+	resp, err := turnstileClient.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", formData)
 	if err != nil {
 		log.Printf("Turnstile verification error: %v", err)
 		return false // Fail secure
@@ -1433,42 +1442,65 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(data))
 }
 
-// cachedIptablesOK 返回带缓存的 iptables 规则检测结果（TTL 60 秒），
-// 规则状态极少变化，避免每个请求都 fork iptables 进程
+// cachedIptablesOK 返回带缓存的 iptables 规则检测结果，避免每个请求都 fork iptables 进程。
+// 规则状态极少变化，确定的结论缓存 60 秒；命令本身失败（等锁超时、被 kill 等）只说明
+// 「这次没看清」，只缓存 10 秒——否则一次撞锁就让页面连续一分钟误报规则缺失
 func (s *Server) cachedIptablesOK(ports []int) bool {
 	s.iptablesMu.Lock()
 	defer s.iptablesMu.Unlock()
-	if time.Since(s.iptablesChecked) < 60*time.Second {
+	if time.Since(s.iptablesChecked) < s.iptablesTTL {
 		return s.iptablesOK
 	}
-	s.iptablesOK = s.checkIptablesRules(ports)
+	ok, err := s.checkIptablesRules(ports)
+	s.iptablesTTL = 60 * time.Second
+	if err != nil {
+		log.Printf("端口统计规则检测失败: %v", err)
+		s.iptablesTTL = 10 * time.Second
+	}
+	s.iptablesOK = ok
 	s.iptablesChecked = time.Now()
-	return s.iptablesOK
+	return ok
+}
+
+// runIptablesList 执行 <bin> -w 5 -S。-w 5 等 xtables 锁最多 5 秒：不等会把偶发的锁竞争
+// 误报成规则缺失，不带秒数的 -w 则是无限期等待。每条命令单独计时，v4 等锁耗掉的时间
+// 不会挤占 v6 的额度
+func runIptablesList(bin string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), iptablesCmdTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "-w", "5", "-S").Output()
+	if err != nil {
+		return "", fmt.Errorf("%s -S 执行失败: %w", bin, err)
+	}
+	return string(out), nil
 }
 
 // checkIptablesRules 检测端口统计规则是否完整。IPv4 必须有；IPv6 只在本机具备
-// ip6tables 能力时才要求——xray 监听 "::"，缺了 v6 规则会让 IPv6 客户端的流量悄悄漏统计
-func (s *Server) checkIptablesRules(ports []int) bool {
+// IPv6 协议栈时才要求——xray 监听 "::"，缺了 v6 规则会让 IPv6 客户端的流量悄悄漏统计。
+// err 非空表示命令没跑成，结论不可靠（此时 ok 为 false）
+func (s *Server) checkIptablesRules(ports []int) (ok bool, err error) {
 	if len(ports) == 0 {
-		return true
+		return true, nil
 	}
 
-	// -w 等待 xtables 锁：与规则脚本或其他进程撞锁时直接失败，会把偶发的锁竞争误报成规则缺失
-	v4, err := exec.Command("iptables", "-w", "-S").Output()
-	if err != nil || !statsRulesComplete(string(v4), ports) {
-		return false
+	v4, err := runIptablesList("iptables")
+	if err != nil {
+		return false, err
+	}
+	if !statsRulesComplete(v4, ports) {
+		return false, nil
 	}
 
 	// 内核没有 IPv6 协议栈时不会有 IPv6 流量，无需 v6 规则。用 /proc 判定而非
 	// 「ip6tables 执行失败就放行」：后者会把权限、锁等临时错误也当成规则正常
 	if _, err := os.Stat("/proc/net/if_inet6"); err != nil {
-		return true
+		return true, nil
 	}
-	v6, err := exec.Command("ip6tables", "-w", "-S").Output()
+	v6, err := runIptablesList("ip6tables")
 	if err != nil {
-		return false
+		return false, err
 	}
-	return statsRulesComplete(string(v6), ports)
+	return statsRulesComplete(v6, ports), nil
 }
 
 // statsRulesComplete 判断 iptables -S / ip6tables -S 的输出里 HELIOX_STATS 链是否完整：

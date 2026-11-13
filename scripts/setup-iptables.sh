@@ -30,27 +30,42 @@ PORTS=()
 [[ "${ENABLE_SNELL:-true}" == "true" ]] && PORTS+=("${SNELL_PORT:-36890}")
 [[ "${ENABLE_XRAY:-true}" == "true" ]] && PORTS+=("${VLESS_PORT:-443}")
 
+# 所有调用都带 -w 5：撞上 xtables 锁时最多等 5 秒。不等会偶发失败，不带秒数的 -w 则无限期等待，
+# 而本脚本在 ExecStartPre 里执行，卡住会让 systemd 启动超时、监控起不来
+# 删光某条内置链上指向 HELIOX_STATS 的跳转（重复执行可能留下多条）。
+# 退出码 4 是 iptables 约定的「资源问题」（含等锁超时），不能当成「已删完」：
+# 否则跳转残留，后续 -X 删不掉链、-N 建不了链，留下一条指向空链的跳转
+delete_jumps() {
+    local bin=$1 chain=$2 rc
+    while :; do
+        "$bin" -w 5 -D "$chain" -j HELIOX_STATS 2>/dev/null
+        rc=$?
+        [[ $rc -eq 0 ]] && continue
+        [[ $rc -eq 4 ]] && return 1
+        return 0
+    done
+}
+
 clean_rules() {
     local bin=$1
-    # 跳转规则可能因重复执行而存在多条，删到删不动为止
-    while "$bin" -w -D INPUT -j HELIOX_STATS 2>/dev/null; do :; done
-    while "$bin" -w -D OUTPUT -j HELIOX_STATS 2>/dev/null; do :; done
-    "$bin" -w -F HELIOX_STATS 2>/dev/null || true
-    "$bin" -w -X HELIOX_STATS 2>/dev/null || true
+    delete_jumps "$bin" INPUT || return 1
+    delete_jumps "$bin" OUTPUT || return 1
+    "$bin" -w 5 -F HELIOX_STATS 2>/dev/null || true
+    "$bin" -w 5 -X HELIOX_STATS 2>/dev/null || true
 }
 
 apply_rules() {
     local bin=$1 port proto
-    clean_rules "$bin"
-    "$bin" -w -N HELIOX_STATS || return 1
-    "$bin" -w -I INPUT -j HELIOX_STATS || return 1
-    "$bin" -w -I OUTPUT -j HELIOX_STATS || return 1
+    clean_rules "$bin" || return 1
+    "$bin" -w 5 -N HELIOX_STATS || return 1
+    "$bin" -w 5 -I INPUT -j HELIOX_STATS || return 1
+    "$bin" -w 5 -I OUTPUT -j HELIOX_STATS || return 1
     # ${arr[@]+...} 写法：bash < 4.4 在 set -u 下展开空数组会报 unbound variable
     for port in ${PORTS[@]+"${PORTS[@]}"}; do
         [[ "$port" == "0" ]] && continue
         for proto in tcp udp; do
-            "$bin" -w -A HELIOX_STATS -p "$proto" --sport "$port" || return 1  # TX
-            "$bin" -w -A HELIOX_STATS -p "$proto" --dport "$port" || return 1  # RX
+            "$bin" -w 5 -A HELIOX_STATS -p "$proto" --sport "$port" || return 1  # TX
+            "$bin" -w 5 -A HELIOX_STATS -p "$proto" --dport "$port" || return 1  # RX
         done
     done
 }
@@ -59,9 +74,12 @@ IPTABLES=$(command -v iptables || echo /usr/sbin/iptables)
 IP6TABLES=$(command -v ip6tables || echo /usr/sbin/ip6tables)
 
 if [[ "${1:-}" == "--clean" ]]; then
-    [[ -x "$IPTABLES" ]] && clean_rules "$IPTABLES"
-    [[ -x "$IP6TABLES" ]] && clean_rules "$IP6TABLES"
-    echo "HELIOX_STATS 规则已清理"
+    CLEAN_FAILED=0
+    for bin in "$IPTABLES" "$IP6TABLES"; do
+        [[ -x "$bin" ]] || continue
+        clean_rules "$bin" || { echo "警告: $bin 清理未完成（等锁超时），可稍后重试" >&2; CLEAN_FAILED=1; }
+    done
+    [[ "$CLEAN_FAILED" == "0" ]] && echo "HELIOX_STATS 规则已清理"
     exit 0
 fi
 

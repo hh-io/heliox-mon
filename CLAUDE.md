@@ -65,6 +65,7 @@ HELIOX_MON_PASS=test go run ./cmd/heliox-mon
   - 弹层开合（点外部 / Esc 关闭）统一走 `core/dom.js` 的 `bindPopover`，外壳样式统一用 `.popover`。
   - ES module 不能用 `file://` 打开（CORS 拒绝，报错与真实故障无关），调试一律跑 `HELIOX_MON_PASS=test go run ./cmd/heliox-mon`。
   - 类型检查由根目录 `jsconfig.json`（`checkJs` + JSDoc）提供，只作用于编辑器，不进 CI、不引入 npm 依赖。`jsconfig.json` 刻意放在仓库根而非 `web/` 下，避免被 `go:embed js` 打进二进制。
+- **对外请求与外部命令一律设上限**：出站 HTTP 用带 `Timeout` 的 client（不要用 `http.Post` / `http.DefaultClient`），`exec` 用 `CommandContext`，iptables 用 `-w 5` 而非裸 `-w`。采集与汇总都是单协程循环，任何一次调用挂住都会让整条循环静默停摆。Telegram 网络错误要经 `stripRequestURL` 去掉 URL——token 在 URL 路径里。
 - **HTTP 响应统一用 `writeJSON` 辅助函数**（`internal/api/router.go`）输出 JSON；写出失败记日志而非静默忽略。
   `/api/latency` 额外套 `gzipJSON`（逐包样本让 24h 视图接近 1MB，前端每 60 秒全量重拉）；**SSE 端点不能套**，压缩流会被缓冲，实时推送变成一次性吐出。
 - **SQLite 用纯 Go 驱动 `modernc.org/sqlite`（无需 CGO）**，WAL 模式；表结构与迁移集中在 `internal/storage/sqlite.go` 的 `migrate()`，启动时执行。

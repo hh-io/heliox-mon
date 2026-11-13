@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,15 +20,29 @@ import (
 	"github.com/hh/heliox-mon/internal/storage"
 )
 
+// telegramTimeout 是单次 Telegram 请求的上限。流量预警在日汇总循环里同步发送，
+// 默认 http.Client 没有整体超时：对端建连后不响应，汇总、快照清理、延迟降采样会跟着
+// 永久卡住，进程还活着、日志里一个字都没有
+const telegramTimeout = 10 * time.Second
+
+const defaultTelegramAPIBase = "https://api.telegram.org"
+
 // Notifier 通知发送器
 type Notifier struct {
-	cfg *config.Config
-	db  *storage.DB
+	cfg     *config.Config
+	db      *storage.DB
+	client  *http.Client
+	apiBase string // 测试时指向本地服务
 }
 
 // New 创建通知器
 func New(cfg *config.Config, db *storage.DB) *Notifier {
-	return &Notifier{cfg: cfg, db: db}
+	return &Notifier{
+		cfg:     cfg,
+		db:      db,
+		client:  &http.Client{Timeout: telegramTimeout},
+		apiBase: defaultTelegramAPIBase,
+	}
 }
 
 // SendTrafficAlert 发送流量报警
@@ -398,7 +414,7 @@ func (n *Notifier) SendTest() error {
 
 // sendTelegram 发送 Telegram 消息
 func (n *Notifier) sendTelegram(text string) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", n.cfg.TelegramBotToken)
+	endpoint := fmt.Sprintf("%s/bot%s/sendMessage", n.apiBase, n.cfg.TelegramBotToken)
 
 	payload := map[string]string{
 		"chat_id":    n.cfg.TelegramChatID,
@@ -407,9 +423,9 @@ func (n *Notifier) sendTelegram(text string) error {
 	}
 	body, _ := json.Marshal(payload)
 
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := n.client.Post(endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("请求 Telegram API 失败: %w", stripRequestURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -424,4 +440,15 @@ func (n *Notifier) sendTelegram(text string) error {
 	}
 
 	return nil
+}
+
+// stripRequestURL 去掉 *url.Error 里的请求 URL，只保留底层原因。
+// bot token 就在 URL 路径里，而 *url.Error 的文本形如 `Post "<完整 URL>": <原因>`，
+// 原样记日志或回显到页面就等于把 token 交了出去
+func stripRequestURL(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err
+	}
+	return err
 }

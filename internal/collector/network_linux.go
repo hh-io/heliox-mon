@@ -2,6 +2,7 @@ package collector
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -213,6 +214,8 @@ const (
 	familyV6 = "ipv6"
 )
 
+const iptablesSaveTimeout = 10 * time.Second
+
 var portFamilies = []struct {
 	name string
 	bin  string
@@ -344,7 +347,10 @@ func (c *Collector) readPortCounters(ports []int) map[string]map[int]rawPortCoun
 
 	readings := make(map[string]map[int]rawPortCounter, len(portFamilies))
 	for _, fam := range portFamilies {
-		output, err := exec.Command(fam.bin, "-c", "-t", "filter").Output()
+		// 设上限：命令挂住会卡死流量采集协程，整机流量快照也跟着停写
+		ctx, cancel := context.WithTimeout(context.Background(), iptablesSaveTimeout)
+		output, err := exec.CommandContext(ctx, fam.bin, "-c", "-t", "filter").Output()
+		cancel()
 		if err != nil {
 			c.reportPortReadErr(fam.name, fmt.Errorf("%s 执行失败: %w", fam.bin, err))
 			continue
