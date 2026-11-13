@@ -308,3 +308,28 @@ func TestValidateLatencySample_AggregateWeights(t *testing.T) {
 		})
 	}
 }
+
+func TestStatsRulesComplete(t *testing.T) {
+	full := strings.Join([]string{
+		"-P INPUT ACCEPT",
+		"-N HELIOX_STATS",
+		"-A INPUT -j HELIOX_STATS",
+		"-A OUTPUT -j HELIOX_STATS",
+		"-A HELIOX_STATS -p tcp -m tcp --sport 443",
+		"-A HELIOX_STATS -p tcp -m tcp --dport 443",
+		"-A HELIOX_STATS -p udp -m udp --sport 443",
+		"-A HELIOX_STATS -p udp -m udp --dport 443",
+	}, "\n")
+	if !statsRulesComplete(full, []int{443}) {
+		t.Error("规则齐全时应返回 true")
+	}
+	if statsRulesComplete(strings.Replace(full, "-A OUTPUT -j HELIOX_STATS", "", 1), []int{443}) {
+		t.Error("缺 OUTPUT 跳转时应返回 false")
+	}
+	if statsRulesComplete(strings.Replace(full, "-p udp -m udp --dport 443", "-p udp -m udp --dport 4430", 1), []int{443}) {
+		t.Error("--dport 4430 不应被当作 443 的规则")
+	}
+	if statsRulesComplete("", []int{443}) {
+		t.Error("空输出应返回 false")
+	}
+}

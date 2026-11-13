@@ -218,7 +218,7 @@ async function fetchPortTraffic(monthTotalBytes) {
     if (data.iptables_ok === false) {
       setHtml(
         "port-rows",
-        '<div class="pt-note">⚠️ iptables 规则未完整配置（TCP/UDP），请运行 setup-iptables.sh</div>',
+        '<div class="pt-note">⚠️ 端口统计规则不完整（iptables / ip6tables），请执行 sudo ./deploy.sh monitor restart</div>',
       );
       return;
     }

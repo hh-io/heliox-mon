@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -1229,13 +1230,14 @@ func (s *Server) handlePortTraffic(w http.ResponseWriter, r *http.Request) {
 		Port int    `json:"port"`
 		Name string `json:"name"`
 	}{}
-	if s.cfg.SnellPort > 0 {
+	// 已停用协议不再列出（历史月度汇总仍按端口号查询，不受影响）
+	if s.cfg.SnellEnabled && s.cfg.SnellPort > 0 {
 		ports = append(ports, struct {
 			Port int    `json:"port"`
 			Name string `json:"name"`
 		}{Port: s.cfg.SnellPort, Name: "Snell"})
 	}
-	if s.cfg.VlessPort > 0 {
+	if s.cfg.XrayEnabled && s.cfg.VlessPort > 0 {
 		ports = append(ports, struct {
 			Port int    `json:"port"`
 			Name string `json:"name"`
@@ -1444,19 +1446,34 @@ func (s *Server) cachedIptablesOK(ports []int) bool {
 	return s.iptablesOK
 }
 
-// checkIptablesRules 检测 iptables 规则是否存在
+// checkIptablesRules 检测端口统计规则是否完整。IPv4 必须有；IPv6 只在本机具备
+// ip6tables 能力时才要求——xray 监听 "::"，缺了 v6 规则会让 IPv6 客户端的流量悄悄漏统计
 func (s *Server) checkIptablesRules(ports []int) bool {
 	if len(ports) == 0 {
 		return true
 	}
 
-	cmd := exec.Command("iptables", "-S")
-	output, err := cmd.Output()
-	if err != nil {
+	// -w 等待 xtables 锁：与规则脚本或其他进程撞锁时直接失败，会把偶发的锁竞争误报成规则缺失
+	v4, err := exec.Command("iptables", "-w", "-S").Output()
+	if err != nil || !statsRulesComplete(string(v4), ports) {
 		return false
 	}
 
-	rules := strings.Split(string(output), "\n")
+	// 内核没有 IPv6 协议栈时不会有 IPv6 流量，无需 v6 规则。用 /proc 判定而非
+	// 「ip6tables 执行失败就放行」：后者会把权限、锁等临时错误也当成规则正常
+	if _, err := os.Stat("/proc/net/if_inet6"); err != nil {
+		return true
+	}
+	v6, err := exec.Command("ip6tables", "-w", "-S").Output()
+	if err != nil {
+		return false
+	}
+	return statsRulesComplete(string(v6), ports)
+}
+
+// statsRulesComplete 判断 iptables -S / ip6tables -S 的输出里 HELIOX_STATS 链是否完整：
+// INPUT/OUTPUT 跳转都在，且每个端口的 TCP/UDP、sport/dport 四条规则齐全
+func statsRulesComplete(output string, ports []int) bool {
 	hasInputJump := false
 	hasOutputJump := false
 	dptTCP := make(map[int]bool)
@@ -1464,7 +1481,7 @@ func (s *Server) checkIptablesRules(ports []int) bool {
 	dptUDP := make(map[int]bool)
 	sptUDP := make(map[int]bool)
 
-	for _, line := range rules {
+	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -1488,18 +1505,20 @@ func (s *Server) checkIptablesRules(ports []int) bool {
 		} else {
 			continue
 		}
+		// 补尾部空格做词边界，避免 --dport 443 把 4430 的规则也算进来
+		line += " "
 		for _, port := range ports {
 			if port <= 0 {
 				continue
 			}
-			if strings.Contains(line, fmt.Sprintf("--dport %d", port)) {
+			if strings.Contains(line, fmt.Sprintf("--dport %d ", port)) {
 				if proto == "tcp" {
 					dptTCP[port] = true
 				} else {
 					dptUDP[port] = true
 				}
 			}
-			if strings.Contains(line, fmt.Sprintf("--sport %d", port)) {
+			if strings.Contains(line, fmt.Sprintf("--sport %d ", port)) {
 				if proto == "tcp" {
 					sptTCP[port] = true
 				} else {

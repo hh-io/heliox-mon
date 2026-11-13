@@ -214,3 +214,27 @@ func TestLoadHelioxEnv(t *testing.T) {
 		t.Errorf("VlessPort = %d, want 8443", cfg.VlessPort)
 	}
 }
+
+func TestLoadHelioxEnvDisabledProtocol(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	content := "SNELL_PORT=12345\nVLESS_PORT=8443\nENABLE_SNELL=false\nENABLE_XRAY=true\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{HelioxEnvPath: envPath}
+	if err := cfg.loadHelioxEnv(); err != nil {
+		t.Fatalf("loadHelioxEnv 失败: %v", err)
+	}
+	// 端口号保留，历史数据仍按它查询；只是不再出现在 ActivePorts 里
+	if cfg.SnellPort != 12345 {
+		t.Errorf("SnellPort = %d, want 12345", cfg.SnellPort)
+	}
+	if cfg.SnellEnabled || !cfg.XrayEnabled {
+		t.Errorf("SnellEnabled=%v XrayEnabled=%v, want false/true", cfg.SnellEnabled, cfg.XrayEnabled)
+	}
+	if got := cfg.ActivePorts(); len(got) != 1 || got[0] != 8443 {
+		t.Errorf("ActivePorts() = %v, want [8443]", got)
+	}
+}

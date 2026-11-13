@@ -2,6 +2,8 @@ package collector
 
 import (
 	"bufio"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -122,10 +124,8 @@ func (c *Collector) doCollectTraffic() {
 	c.lastTotalTx.Store(tx)
 	c.lastTotalRx.Store(rx)
 
-	// 2. 采集端口流量（如果配置了端口）
-	if c.cfg.SnellPort > 0 || c.cfg.VlessPort > 0 {
-		c.collectPortTraffic(now)
-	}
+	// 2. 采集端口流量（无启用端口时内部直接返回）
+	c.collectPortTraffic(now)
 }
 
 // initTrafficOffsets 初始化计数器偏移量（用于服务重启后的连续性）
@@ -150,33 +150,12 @@ func (c *Collector) initTrafficOffsets() {
 		}
 	}
 
-	// 端口流量偏移
-	ports := []int{c.cfg.SnellPort, c.cfg.VlessPort}
-	for _, port := range ports {
-		if port == 0 {
-			continue
-		}
-
-		rawPortTx, rawPortRx, err := c.readIptablesPortTraffic(port)
-		if err != nil {
-			continue
-		}
-
-		c.lastPortTx[port] = rawPortTx
-		c.lastPortRx[port] = rawPortRx
-
-		var lastTx, lastRx int64
-		row := c.db.QueryRow(
-			"SELECT tx_bytes, rx_bytes FROM port_traffic_snapshots WHERE port = ? ORDER BY ts DESC LIMIT 1",
-			port,
-		)
-		if err := row.Scan(&lastTx, &lastRx); err == nil {
-			if lastTx > 0 && uint64(lastTx) > rawPortTx {
-				c.portTxOffset[port] = uint64(lastTx) - rawPortTx
-			}
-			if lastRx > 0 && uint64(lastRx) > rawPortRx {
-				c.portRxOffset[port] = uint64(lastRx) - rawPortRx
-			}
+	// 端口累计值：启动时读一次计数器作为基准，并与库里最后一条快照衔接
+	ports := c.cfg.ActivePorts()
+	if len(ports) > 0 {
+		readings := c.readPortCounters(ports)
+		for _, port := range ports {
+			c.seedPort(port, readings)
 		}
 	}
 }
@@ -228,198 +207,228 @@ func (c *Collector) readProcNetDev() (tx, rx uint64, err error) {
 	return tx, rx, scanner.Err()
 }
 
-// collectPortTraffic 采集端口流量（通过 iptables）
-func (c *Collector) collectPortTraffic(now int64) {
-	ports := []int{}
-	if c.cfg.SnellPort > 0 {
-		ports = append(ports, c.cfg.SnellPort)
-	}
-	if c.cfg.VlessPort > 0 {
-		ports = append(ports, c.cfg.VlessPort)
-	}
+// 端口计数器的地址族。xray 监听 "::"（双栈），IPv6 客户端的流量只在 ip6tables 里有计数
+const (
+	familyV4 = "ipv4"
+	familyV6 = "ipv6"
+)
 
+var portFamilies = []struct {
+	name string
+	bin  string
+}{
+	{familyV4, "iptables-save"},
+	{familyV6, "ip6tables-save"},
+}
+
+// collectPortTraffic 采集端口流量（通过 iptables / ip6tables 计数器）
+func (c *Collector) collectPortTraffic(now int64) {
+	ports := c.cfg.ActivePorts()
 	if len(ports) == 0 {
 		return
 	}
 
-	counters, err := c.readIptablesPortsTraffic(ports)
-	if err != nil {
-		// iptables 规则可能不存在，静默失败
-		return
-	}
-
+	readings := c.readPortCounters(ports)
 	for _, port := range ports {
-		stats, ok := counters[port]
-		if !ok || !stats.txOK || !stats.rxOK {
+		if _, seeded := c.lastPortTx[port]; !seeded {
+			// 启动时规则还没就绪等情况下没能建立基准，这里补上；本轮没有增量
+			if !c.seedPort(port, readings) {
+				continue
+			}
+		} else if !c.advancePort(port, readings) {
 			continue
 		}
-		tx := stats.tx
-		rx := stats.rx
 
-		// 检测计数器重置
-		lastTx := c.lastPortTx[port]
-		lastRx := c.lastPortRx[port]
-		if lastTx > 0 && tx < lastTx {
-			c.portTxOffset[port] += lastTx
-			log.Printf("检测到端口 %d TX 计数器重置，累加偏移量: %d", port, lastTx)
-		}
-		if lastRx > 0 && rx < lastRx {
-			c.portRxOffset[port] += lastRx
-			log.Printf("检测到端口 %d RX 计数器重置，累加偏移量: %d", port, lastRx)
-		}
-
-		// 保存快照（加上偏移量）
-		adjustedTx := tx + c.portTxOffset[port]
-		adjustedRx := rx + c.portRxOffset[port]
-
-		_, err = c.db.Exec(
+		_, err := c.db.Exec(
 			"INSERT INTO port_traffic_snapshots (ts, port, tx_bytes, rx_bytes) VALUES (?, ?, ?, ?)",
-			now, port, adjustedTx, adjustedRx,
+			now, port, c.lastPortTx[port], c.lastPortRx[port],
 		)
 		if err != nil {
 			log.Printf("保存端口 %d 流量快照失败: %v", port, err)
 		}
-
-		c.lastPortTx[port] = tx
-		c.lastPortRx[port] = rx
 	}
 }
 
-type portCounters struct {
-	tx   uint64
-	rx   uint64
-	txOK bool
-	rxOK bool
-}
-
-func (c *Collector) readIptablesPortsTraffic(ports []int) (map[int]portCounters, error) {
-	// 使用 iptables-save -c 获取计数器
-	// 输出格式固定：[pkts:bytes] -A HELIOX_STATS -p tcp --dport 443
-	cmd := exec.Command("iptables-save", "-c", "-t", "filter")
-	output, err := cmd.Output()
-	if err != nil {
-		// 回退到传统方法
-		return c.readIptablesPortsTrafficLegacy(ports)
-	}
-
-	counters := make(map[int]portCounters, len(ports))
-	targets := make(map[int]struct{}, len(ports))
-	for _, port := range ports {
-		if port <= 0 {
+// seedPort 为端口建立计数器基准，并让累计值与库里最后一条快照衔接（取两者较大者：
+// 服务停机期间计数器未重置时，停机那段流量仍应计入）。没有任何地址族可读时返回 false
+func (c *Collector) seedPort(port int, readings map[string]map[int]rawPortCounter) bool {
+	var sumTx, sumRx uint64
+	found := false
+	for _, fam := range portFamilies {
+		cur, ok := readings[fam.name][port]
+		if !ok {
 			continue
 		}
-		targets[port] = struct{}{}
-		counters[port] = portCounters{}
+		c.lastPortRaw[portFamilyKey{fam.name, port}] = cur
+		sumTx += cur.tx
+		sumRx += cur.rx
+		found = true
+	}
+	if !found {
+		return false
 	}
 
-	// 正则匹配：[pkts:bytes] -A HELIOX_STATS -p tcp -m tcp --(dport|sport) 443
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	var dbTx, dbRx int64
+	row := c.db.QueryRow(
+		"SELECT tx_bytes, rx_bytes FROM port_traffic_snapshots WHERE port = ? ORDER BY ts DESC LIMIT 1",
+		port,
+	)
+	switch err := row.Scan(&dbTx, &dbRx); {
+	case err == nil:
+		if dbTx > 0 && uint64(dbTx) > sumTx {
+			sumTx = uint64(dbTx)
+		}
+		if dbRx > 0 && uint64(dbRx) > sumRx {
+			sumRx = uint64(dbRx)
+		}
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		log.Printf("读取端口 %d 最近快照失败: %v", port, err)
+	}
+
+	c.lastPortTx[port] = sumTx
+	c.lastPortRx[port] = sumRx
+	return true
+}
+
+// advancePort 把各地址族计数器相对上一轮的增量累加到端口累计值。
+// 某个地址族本轮读不到时不动它的基准，下一轮读到时增量自然补齐；
+// 运行中新出现的地址族（如刚补上 ip6tables 规则）首轮只建基准。
+// 没有任何地址族可读时返回 false，本轮不写快照
+func (c *Collector) advancePort(port int, readings map[string]map[int]rawPortCounter) bool {
+	var dTx, dRx uint64
+	found := false
+	for _, fam := range portFamilies {
+		cur, ok := readings[fam.name][port]
+		if !ok {
+			continue
+		}
+		found = true
+		key := portFamilyKey{fam.name, port}
+		last, seen := c.lastPortRaw[key]
+		c.lastPortRaw[key] = cur
+		if !seen {
+			continue
+		}
+		if cur.tx < last.tx || cur.rx < last.rx {
+			log.Printf("检测到端口 %d 的 %s 计数器重置（规则被重建或系统重启）", port, fam.name)
+		}
+		dTx += counterDelta(last.tx, cur.tx)
+		dRx += counterDelta(last.rx, cur.rx)
+	}
+	if !found {
+		return false
+	}
+	c.lastPortTx[port] += dTx
+	c.lastPortRx[port] += dRx
+	return true
+}
+
+// counterDelta 计算累计计数器的增量；计数器回退视为从 0 重新开始
+func counterDelta(last, cur uint64) uint64 {
+	if cur >= last {
+		return cur - last
+	}
+	return cur
+}
+
+// readPortCounters 读取各地址族下目标端口的计数器。
+// 只收录 TX/RX 两个方向规则都在的端口；读取失败的地址族整体缺席
+func (c *Collector) readPortCounters(ports []int) map[string]map[int]rawPortCounter {
+	targets := make(map[int]struct{}, len(ports))
+	for _, port := range ports {
+		if port > 0 {
+			targets[port] = struct{}{}
+		}
+	}
+
+	readings := make(map[string]map[int]rawPortCounter, len(portFamilies))
+	for _, fam := range portFamilies {
+		output, err := exec.Command(fam.bin, "-c", "-t", "filter").Output()
+		if err != nil {
+			c.reportPortReadErr(fam.name, fmt.Errorf("%s 执行失败: %w", fam.bin, err))
+			continue
+		}
+		counters, err := parseIptablesSave(string(output), targets)
+		if err != nil {
+			c.reportPortReadErr(fam.name, fmt.Errorf("解析 %s 输出失败: %w", fam.bin, err))
+			continue
+		}
+		c.reportPortReadErr(fam.name, nil)
+		readings[fam.name] = counters
+	}
+	return readings
+}
+
+// reportPortReadErr 只在读取状态变化（首次失败、原因改变、恢复）时打日志：
+// 规则丢失或命令缺失通常持续存在，逐轮打印会淹没其他日志
+func (c *Collector) reportPortReadErr(family string, err error) {
+	prev := c.portReadErr[family]
+	if err == nil {
+		if prev != "" {
+			log.Printf("端口流量计数器（%s）读取已恢复", family)
+			delete(c.portReadErr, family)
+		}
+		return
+	}
+	msg := err.Error()
+	if msg != prev {
+		log.Printf("端口流量计数器（%s）读取失败，该地址族流量暂不计入: %s", family, msg)
+		c.portReadErr[family] = msg
+	}
+}
+
+// parseIptablesSave 从 iptables-save -c / ip6tables-save -c 的输出中提取 HELIOX_STATS 链
+// 的端口计数器。行格式：[pkts:bytes] -A HELIOX_STATS -p tcp -m tcp --dport 443。
+// dport 计入 RX，sport 计入 TX，TCP/UDP 累加；两个方向都有规则的端口才收录
+func parseIptablesSave(output string, targets map[int]struct{}) (map[int]rawPortCounter, error) {
+	type partial struct {
+		rawPortCounter
+		txOK, rxOK bool
+	}
+	found := make(map[int]*partial, len(targets))
+
+	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
-		line := scanner.Text()
-		match := reIptablesCounter.FindStringSubmatch(line)
+		match := reIptablesCounter.FindStringSubmatch(scanner.Text())
 		if match == nil {
 			continue
 		}
-
-		// match[1] = pkts, match[2] = bytes, match[3] = proto, match[4] = dport/sport, match[5] = port
-		bytes, _ := strconv.ParseUint(match[2], 10, 64)
-		port, _ := strconv.Atoi(match[5])
-		direction := match[4] // "dport" or "sport"
-
-		if _, ok := targets[port]; !ok {
-			continue
-		}
-
-		entry := counters[port]
-		if direction == "dport" {
-			entry.rx += bytes
-			entry.rxOK = true
-		} else if direction == "sport" {
-			entry.tx += bytes
-			entry.txOK = true
-		}
-		counters[port] = entry
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return counters, nil
-}
-
-// readIptablesPortsTrafficLegacy 回退方法（兼容旧版本 iptables）
-func (c *Collector) readIptablesPortsTrafficLegacy(ports []int) (map[int]portCounters, error) {
-	cmd := exec.Command("iptables", "-L", "HELIOX_STATS", "-n", "-v", "-x")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("iptables 命令执行失败: %w", err)
-	}
-
-	counters := make(map[int]portCounters, len(ports))
-	targets := make(map[int]struct{}, len(ports))
-	for _, port := range ports {
-		if port <= 0 {
-			continue
-		}
-		targets[port] = struct{}{}
-		counters[port] = portCounters{}
-	}
-
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		proto := fields[3]
-		if proto != "tcp" && proto != "udp" {
-			continue
-		}
-		if !strings.Contains(line, "dpt:") && !strings.Contains(line, "spt:") {
-			continue
-		}
-		bytes, err := strconv.ParseUint(fields[1], 10, 64)
+		// match[2] = bytes, match[4] = dport/sport, match[5] = port
+		port, err := strconv.Atoi(match[5])
 		if err != nil {
 			continue
 		}
-		for port := range targets {
-			if strings.Contains(line, fmt.Sprintf("dpt:%d", port)) {
-				entry := counters[port]
-				entry.rx += bytes
-				entry.rxOK = true
-				counters[port] = entry
-			}
-			if strings.Contains(line, fmt.Sprintf("spt:%d", port)) {
-				entry := counters[port]
-				entry.tx += bytes
-				entry.txOK = true
-				counters[port] = entry
-			}
+		if _, ok := targets[port]; !ok {
+			continue
+		}
+		bytes, err := strconv.ParseUint(match[2], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("端口 %d 计数器非法: %w", port, err)
+		}
+
+		entry := found[port]
+		if entry == nil {
+			entry = &partial{}
+			found[port] = entry
+		}
+		if match[4] == "dport" {
+			entry.rx += bytes
+			entry.rxOK = true
+		} else {
+			entry.tx += bytes
+			entry.txOK = true
 		}
 	}
-
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	return counters, nil
-}
 
-// readIptablesPortTraffic 从 iptables 读取端口流量
-// 需要预先设置 iptables 规则：
-// iptables -N HELIOX_STATS
-// iptables -I INPUT -j HELIOX_STATS
-// iptables -I OUTPUT -j HELIOX_STATS
-// iptables -A HELIOX_STATS -p tcp --sport <port>  # TX
-// iptables -A HELIOX_STATS -p tcp --dport <port>  # RX
-func (c *Collector) readIptablesPortTraffic(port int) (tx, rx uint64, err error) {
-	counters, err := c.readIptablesPortsTraffic([]int{port})
-	if err != nil {
-		return 0, 0, err
+	counters := make(map[int]rawPortCounter, len(found))
+	for port, entry := range found {
+		if entry.txOK && entry.rxOK {
+			counters[port] = entry.rawPortCounter
+		}
 	}
-	stats, ok := counters[port]
-	if !ok || !stats.txOK || !stats.rxOK {
-		return 0, 0, fmt.Errorf("iptables 规则不存在: port %d", port)
-	}
-	return stats.tx, stats.rx, nil
+	return counters, nil
 }

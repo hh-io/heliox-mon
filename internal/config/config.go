@@ -47,9 +47,12 @@ type Config struct {
 	// Heliox 配置路径
 	HelioxEnvPath string
 
-	// 端口监控
-	SnellPort int
-	VlessPort int
+	// 端口监控。端口号即便协议已停用也保留：历史数据按端口号查询，
+	// 停用只影响「是否继续采集/展示当前端口」，见 ActivePorts
+	SnellPort    int
+	VlessPort    int
+	SnellEnabled bool
+	XrayEnabled  bool
 
 	// 时区
 	Timezone *time.Location
@@ -96,6 +99,8 @@ func Load() (*Config, error) {
 		Username:           getEnv("HELIOX_MON_USER", "admin"),
 		Password:           getEnv("HELIOX_MON_PASS", ""),
 		HelioxEnvPath:      getEnv("HELIOX_ENV_PATH", "../heliox/.env"),
+		SnellEnabled:       true,
+		XrayEnabled:        true,
 		TelegramBotToken:   getEnv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:     getEnv("TELEGRAM_CHAT_ID", ""),
 		DailyReportEnabled: getEnvBool("DAILY_REPORT_ENABLED", false),
@@ -186,13 +191,14 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// loadHelioxEnv 从 heliox/.env 读取端口配置
+// loadHelioxEnv 从 heliox/.env 读取端口配置及协议启用状态
 func (c *Config) loadHelioxEnv() error {
 	data, err := os.ReadFile(c.HelioxEnvPath)
 	if err != nil {
 		return err
 	}
 
+	snellEnabled, xrayEnabled := true, true
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -214,6 +220,11 @@ func (c *Config) loadHelioxEnv() error {
 			if v, err := strconv.Atoi(value); err == nil {
 				c.VlessPort = v
 			}
+		// 判定口径与 heliox deploy.sh 一致：变量存在时只有字面量 true 算启用
+		case "ENABLE_SNELL":
+			snellEnabled = value == "true"
+		case "ENABLE_XRAY":
+			xrayEnabled = value == "true"
 		}
 	}
 
@@ -223,8 +234,24 @@ func (c *Config) loadHelioxEnv() error {
 	if c.VlessPort == 0 {
 		c.VlessPort = 443
 	}
+	// heliox 的 uninstall-snell / uninstall-xray 会置 ENABLE_*=false 但保留端口变量
+	c.SnellEnabled = snellEnabled
+	c.XrayEnabled = xrayEnabled
 
 	return nil
+}
+
+// ActivePorts 返回当前需要采集与展示的端口：已配置且协议未停用。
+// 停用协议不再统计，否则规则脚本跳过了它、规则检测却仍要求它，页面会一直报规则缺失
+func (c *Config) ActivePorts() []int {
+	ports := make([]int, 0, 2)
+	if c.SnellEnabled && c.SnellPort > 0 {
+		ports = append(ports, c.SnellPort)
+	}
+	if c.XrayEnabled && c.VlessPort > 0 {
+		ports = append(ports, c.VlessPort)
+	}
+	return ports
 }
 
 // DataPath 返回数据目录下的文件路径

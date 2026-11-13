@@ -77,6 +77,7 @@ HELIOX_MON_PASS=test go run ./cmd/heliox-mon
 
 - 流量只统计物理网卡：`readProcNetDev` 通过 `isVirtualIface` 排除 `lo`/容器网桥/隧道接口（tun/wg/cloudflared 等），避免代理流量被重复计入。新增隧道类型需更新前缀列表。
 - 累计计数器用偏移量处理重启/溢出（`initTrafficOffsets` + 采集时检测回退）；不要改成直接用原始 `/proc` 值。
+- 端口流量 = iptables + ip6tables 两个地址族之和（xray 监听 `::`，只读 v4 会漏掉 IPv6 客户端）。**按地址族各自维护基准、累加增量**（`advancePort`），不要退回成「先求和再检测回退」：某一族某轮读不到或被单独重建时，和会下降，被当成重置后把另一族整份重复计入。运行中新出现的地址族首轮只建基准。「当前要采集/展示哪些端口」一律走 `cfg.ActivePorts()`（排除 `ENABLE_*` 停用的协议）；`SnellPort`/`VlessPort` 停用后仍保留，历史查询按端口号取数，别为了「停用」把它们置 0。规则脚本的权威版本在 heliox `deploy.sh` 的 `write_monitor_iptables_script`，与本仓库 `scripts/setup-iptables.sh` 逻辑保持一致（含默认端口必须与 `loadHelioxEnv` 相同）。
 - 延迟数据：每次探测解析逐包 RTT（不要只存 ping 摘要均值），原始记录保留 7 天，更早的按 10 分钟桶从真实样本算出 P95/max 后再丢掉 `rtts`，聚合行保留 90 天（`aggregateLatencyData`）——不要退回成直接 DELETE 或对均值再平均。`PING_COUNT` 夹在 `[1, config.MaxPingCount]`——它必须等于 `maxRTTsPerPoint`，否则一轮探测的样本装不进一个时间桶，API 不再下发 `rtts`，前端静默退回「P95 约」。`PING_GAP_MS` 必须传给 `ping -i`，且非 root 下要夹到 200ms——iputils 对非 root 强制 `-i >= 0.2`，更小的值会让 ping 以退出码 2 失败，而该退出码被归为「执行环境错误」只打日志跳过，结果是延迟图整片变空。
 - 多目标时**前端读数一律只讲焦点目标**（`statsTag`，点胶囊切换）：横幅与指标条都不把不同
   链路的 RTT 求平均——40ms 与 170ms 平均出的 105ms 不是任何一条链路的现状。横幅的状态灯

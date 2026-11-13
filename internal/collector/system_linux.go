@@ -60,7 +60,7 @@ func (c *Collector) collectPortConns(now time.Time) map[int]int {
 		return c.lastConns
 	}
 
-	c.lastConns = countEstablished([]int{c.cfg.SnellPort, c.cfg.VlessPort})
+	c.lastConns = countEstablished(c.cfg.ActivePorts())
 	c.lastConnsAt = now
 	return c.lastConns
 }

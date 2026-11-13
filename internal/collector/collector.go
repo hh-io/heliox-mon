@@ -28,14 +28,19 @@ type Collector struct {
 	// 端口相关的 map 只在流量采集协程内使用，无需同步
 	lastTotalTx atomic.Uint64
 	lastTotalRx atomic.Uint64
+
+	// 端口累计流量（写入快照的值）。由各地址族计数器的增量累加而来，
+	// 不是原始计数器之和：v4/v6 两份计数器各自可能被重置或某轮读不到，
+	// 直接求和再做回退检测，会把单边缺失误判为重置、把另一边重复计入
 	lastPortTx  map[int]uint64
 	lastPortRx  map[int]uint64
+	lastPortRaw map[portFamilyKey]rawPortCounter
+	// 各地址族最近一次读取失败的原因，只在状态变化时打日志，避免每分钟刷屏
+	portReadErr map[string]string
 
 	// 计数器重置偏移量（用于处理重启/溢出）
 	totalTxOffset atomic.Uint64
 	totalRxOffset atomic.Uint64
-	portTxOffset  map[int]uint64
-	portRxOffset  map[int]uint64
 
 	// CPU 采样基准（只在系统采集协程内读写）。用独立的 bool 标记而非
 	// 「total == 0」判断是否已有基准：total 本身可以合法地为任意值
@@ -150,15 +155,27 @@ type Notifier interface {
 // New 创建采集器
 func New(cfg *config.Config, db *storage.DB, notifier Notifier) *Collector {
 	return &Collector{
-		cfg:          cfg,
-		db:           db,
-		notifier:     notifier,
-		stop:         make(chan struct{}),
-		lastPortTx:   make(map[int]uint64),
-		lastPortRx:   make(map[int]uint64),
-		portTxOffset: make(map[int]uint64),
-		portRxOffset: make(map[int]uint64),
+		cfg:         cfg,
+		db:          db,
+		notifier:    notifier,
+		stop:        make(chan struct{}),
+		lastPortTx:  make(map[int]uint64),
+		lastPortRx:  make(map[int]uint64),
+		lastPortRaw: make(map[portFamilyKey]rawPortCounter),
+		portReadErr: make(map[string]string),
 	}
+}
+
+// portFamilyKey 标识某个地址族（ipv4/ipv6）下某端口的计数器
+type portFamilyKey struct {
+	family string
+	port   int
+}
+
+// rawPortCounter 是 iptables/ip6tables 计数器的原始字节数
+type rawPortCounter struct {
+	tx uint64
+	rx uint64
 }
 
 // GetRealtimeSnapshot 获取实时快照
@@ -418,12 +435,7 @@ func (c *Collector) aggregatePortDailyTraffic(date string) {
 		return
 	}
 
-	ports := []int{c.cfg.SnellPort, c.cfg.VlessPort}
-	for _, port := range ports {
-		if port == 0 {
-			continue
-		}
-
+	for _, port := range c.cfg.ActivePorts() {
 		row := c.db.QueryRow(`
 			SELECT MAX(tx_bytes) - MIN(tx_bytes), MAX(rx_bytes) - MIN(rx_bytes)
 			FROM port_traffic_snapshots

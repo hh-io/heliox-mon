@@ -30,12 +30,7 @@ func (c *Collector) doCollectTraffic() {
 	}
 
 	// 模拟端口流量
-	ports := []int{c.cfg.SnellPort, c.cfg.VlessPort}
-	for _, port := range ports {
-		if port == 0 {
-			continue
-		}
-
+	for _, port := range c.cfg.ActivePorts() {
 		// 端口流量少一点
 		ptx := uint64(rand.Int63n(2 * 1024 * 1024))
 		prx := uint64(rand.Int63n(5 * 1024 * 1024))
@@ -106,10 +101,8 @@ func (c *Collector) doCollectSystemMetrics() {
 	diskUsed := uint64(rand.Float64() * float64(diskTotal))
 
 	portConns := make(map[int]int)
-	for _, port := range []int{c.cfg.SnellPort, c.cfg.VlessPort} {
-		if port > 0 {
-			portConns[port] = rand.Intn(120)
-		}
+	for _, port := range c.cfg.ActivePorts() {
+		portConns[port] = rand.Intn(120)
 	}
 
 	steal := rand.Float64() * 3

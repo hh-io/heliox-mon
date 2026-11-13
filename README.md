@@ -174,13 +174,17 @@ done
 
 ### 工作原理
 
-使用 iptables 计数器统计端口流量：创建 `HELIOX_STATS` 链，按端口分别记录上行（TX）与
-下行（RX），同时统计 TCP/UDP；每秒采集快照，每分钟汇总到日统计。
+使用 iptables / ip6tables 计数器统计端口流量：在两个地址族下各创建 `HELIOX_STATS` 链，
+按端口分别记录上行（TX）与下行（RX），同时统计 TCP/UDP，IPv4 与 IPv6 累加；每秒采集快照，
+每分钟汇总到日统计。本机没有可用 ip6tables（如内核未启用 IPv6）时只统计 IPv4。
 
 **无需手动配置。** `./deploy.sh monitor install` 时自动生成规则脚本
 `/opt/heliox-mon/setup-iptables.sh` 并配置 systemd `ExecStartPre`，服务器重启后自动恢复规
-则。验证：`iptables -L HELIOX_STATS -n -v`。端口从 Heliox 的 `/opt/heliox/.env` 自动读取
-（`SNELL_PORT` / `VLESS_PORT`）。
+则；`monitor update` 会重写该脚本，`monitor uninstall` 会清理规则。验证：
+`iptables -L HELIOX_STATS -n -v` 与 `ip6tables -L HELIOX_STATS -n -v`。端口从
+`HELIOX_ENV_PATH` 指向的 Heliox `.env` 读取（`SNELL_PORT` / `VLESS_PORT`），
+`ENABLE_SNELL=false` / `ENABLE_XRAY=false` 的协议不统计。手动部署可用仓库里的
+`scripts/setup-iptables.sh`（`--clean` 清理规则）。
 
 ### 统计准确性
 
