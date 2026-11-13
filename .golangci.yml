@@ -1,26 +1,40 @@
-# golangci-lint 配置：高信号、低噪音，作为 CI 质量门禁
+# golangci-lint v2 配置：高信号、低噪音，作为 CI 质量门禁
+version: "2"
+
 run:
   timeout: 5m
 
 linters:
+  # standard 即 errcheck / govet / ineffassign / staticcheck / unused
+  default: standard
   enable:
-    - errcheck # 未处理的错误（符合"不要静默吞掉异常"约定）
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
     - misspell
-    - gofmt
-    - goimports
     - bodyclose # HTTP 响应体未关闭
     - errorlint # 错误包装/比较使用规范
+  settings:
+    staticcheck:
+      # v2 默认集合基础上关闭 ST1005（错误信息首字母大写）：v2 把 stylecheck 并入了 staticcheck，
+      # 而本项目错误信息是中文，句首常是 Telegram 等专有名词，改小写反而是错的
+      checks: ["all", "-ST1000", "-ST1003", "-ST1005", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
+  exclusions:
+    # 沿用 v1 的默认排除口径（如 Close 返回值、注释规范类告警），避免升级带来与本项目无关的噪音
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # 测试文件中忽略部分检查，降低噪音
+      - path: _test\.go
+        linters:
+          - errcheck
+          - bodyclose
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-rules:
-    # 测试文件中忽略部分检查，降低噪音
-    - path: _test\.go
-      linters:
-        - errcheck
-        - bodyclose

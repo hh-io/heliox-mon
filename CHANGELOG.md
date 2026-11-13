@@ -7,6 +7,12 @@
 
 ### 修复
 
+- **发布二进制带有 12 个已知 Go 标准库漏洞**：Go 1.25 已停止维护，最后的补丁版 1.25.14
+  中 net/http、crypto/tls、crypto/x509、net/textproto 的漏洞（GO-2026-6859 等）只在
+  go1.26.9+ 修复，CI 的 govulncheck 因此变红。Go 升级到 1.27.4（go.mod 与各 workflow），
+  golangci-lint 随之从 v1.64.8 升到 v2.15.0（v1 内置的 x/tools 在 Go 1.27 下类型检查
+  大面积误报），`.golangci.yml` 迁移到 v2 格式，检查口径保持不变。
+
 - **IPv6 客户端的端口流量漏统计**：xray 监听 `::`（双栈），统计却只读 `iptables-save`，
   经 IPv6 连入的 VLESS 流量在端口表里完全看不到（整机总流量读 `/proc/net/dev`，不受影响，
   于是「端口之和」与「总计」的差距莫名变大）。现在同时读取 `ip6tables-save` 并累加；
